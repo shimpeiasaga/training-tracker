@@ -1,0 +1,261 @@
+:root {
+  --primary: #2d6a4f;
+  --primary-light: #40916c;
+  --bg: #f6f8f6;
+  --card: #ffffff;
+  --border: #e0e5e0;
+  --text: #1b2a20;
+  --muted: #6b7a70;
+  --danger: #c0392b;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.topbar {
+  background: var(--primary);
+  color: #fff;
+  padding: 14px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.topbar a { color: #fff; text-decoration: none; }
+.topbar .brand { font-weight: 700; font-size: 1.1rem; }
+.topbar form { margin: 0; }
+.topbar button {
+  background: rgba(255,255,255,0.15);
+  color: #fff;
+  border: none;
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.container {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+h1, h2, h3 { margin-top: 0; }
+
+.stat-row {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.stat-box {
+  flex: 1;
+  min-width: 120px;
+  background: #eef5f0;
+  border-radius: 8px;
+  padding: 14px;
+  text-align: center;
+}
+
+.stat-box .num { font-size: 1.8rem; font-weight: 700; color: var(--primary); }
+.stat-box .label { font-size: 0.8rem; color: var(--muted); }
+
+.checkin-btn {
+  display: block;
+  width: 100%;
+  padding: 18px;
+  font-size: 1.1rem;
+  font-weight: 700;
+  border-radius: 10px;
+  border: none;
+  cursor: pointer;
+  color: #fff;
+  background: var(--primary-light);
+}
+.checkin-btn.checked { background: var(--muted); }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  margin-top: 12px;
+}
+.grid .day {
+  aspect-ratio: 1;
+  border-radius: 4px;
+  background: #e6ece7;
+  position: relative;
+}
+.grid .day.checked { background: var(--primary-light); }
+.grid .day .tip {
+  position: absolute;
+  bottom: -1.4em;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.6rem;
+  color: var(--muted);
+  white-space: nowrap;
+  display: none;
+}
+
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); font-size: 0.92rem; }
+th { color: var(--muted); font-weight: 600; }
+tr:hover { background: #fafcfa; }
+
+.badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; }
+.badge.good { background: #d8f0e0; color: var(--primary); }
+.badge.warn { background: #fdecea; color: var(--danger); }
+
+.btn {
+  display: inline-block;
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: #fff;
+  cursor: pointer;
+  text-decoration: none;
+  color: var(--text);
+  font-size: 0.9rem;
+}
+.btn.primary { background: var(--primary); color: #fff; border: none; }
+.btn.danger { color: var(--danger); border-color: var(--danger); }
+
+.form-row { margin-bottom: 10px; }
+.form-row label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 4px; }
+.form-row input {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 16px; /* iOSでフォーカス時に勝手に拡大ズームされるのを防ぐ */
+}
+
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+.inline-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; }
+.inline-form .form-row { flex: 1; min-width: 140px; margin-bottom: 0; }
+
+.error { color: var(--danger); margin-bottom: 12px; font-size: 0.9rem; }
+.message { color: var(--primary); margin-bottom: 12px; font-size: 0.9rem; }
+
+.login-wrap {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.login-card { width: 320px; }
+
+/* --- バッジ --- */
+.badge-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.badge-item {
+  flex: 1;
+  min-width: 84px;
+  text-align: center;
+  padding: 12px 6px;
+  border-radius: 10px;
+  background: #eef2ef;
+  opacity: 0.45;
+  filter: grayscale(1);
+}
+.badge-item.unlocked {
+  opacity: 1;
+  filter: none;
+  background: #eef5f0;
+  box-shadow: 0 0 0 2px var(--primary-light) inset;
+}
+.badge-item .icon { font-size: 1.8rem; display: block; margin-bottom: 4px; }
+.badge-item .label { font-size: 0.68rem; color: var(--muted); line-height: 1.2; }
+
+/* --- ランキング --- */
+.leaderboard { list-style: none; margin: 0; padding: 0; }
+.leaderboard li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.92rem;
+}
+.leaderboard li:last-child { border-bottom: none; }
+.leaderboard .rank {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #eef2ef;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}
+.leaderboard li.rank-1 .rank { background: #ffe08a; color: #7a5b00; }
+.leaderboard li.rank-2 .rank { background: #dfe3e6; color: #52565a; }
+.leaderboard li.rank-3 .rank { background: #eac9a2; color: #6b4413; }
+.leaderboard li.me { background: #eef5f0; border-radius: 8px; }
+.leaderboard .name { flex: 1; }
+.leaderboard .count { font-weight: 700; color: var(--primary); }
+
+/* --- お祝い演出 --- */
+.celebrate-banner {
+  background: linear-gradient(135deg, #40916c, #2d6a4f);
+  color: #fff;
+  border-radius: 10px;
+  padding: 18px 20px;
+  margin-bottom: 20px;
+  text-align: center;
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+.celebrate-banner .sub { font-weight: 400; font-size: 0.85rem; opacity: 0.9; margin-top: 4px; }
+
+.confetti-piece {
+  position: fixed;
+  top: -10px;
+  width: 8px;
+  height: 14px;
+  z-index: 999;
+  pointer-events: none;
+  animation: confetti-fall linear forwards;
+}
+@keyframes confetti-fall {
+  to {
+    transform: translateY(105vh) rotate(540deg);
+    opacity: 0.3;
+  }
+}
+
+/* --- スマホ向けの余白調整(会員は基本スマホ操作を想定) --- */
+@media (max-width: 480px) {
+  .container { padding: 14px; }
+  .card { padding: 16px; margin-bottom: 14px; }
+  .topbar { padding: 12px 16px; }
+  .stat-box { min-width: 100px; padding: 12px; }
+  .stat-box .num { font-size: 1.5rem; }
+  .badge-item { min-width: 70px; padding: 10px 4px; }
+  .badge-item .icon { font-size: 1.5rem; }
+  .checkin-btn { padding: 16px; font-size: 1rem; }
+  th, td { padding: 8px 6px; font-size: 0.85rem; }
+}

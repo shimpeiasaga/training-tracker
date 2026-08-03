@@ -1,0 +1,29 @@
+{
+  "users": [
+    {
+      "id": 1,
+      "name": "管理者",
+      "username": "admin",
+      "passwordHash": "2267c0832cb62c4805a6a468416954bf:bed0ed61bcce11956217c7bd9ee5920a55bb56d1746a6e0dae7ec4ffa33626e7c726f0c7537b867c628e310bd96ec55c7a94204441a7834130664ee42d489159",
+      "role": "admin",
+      "rewardsGiven": 0
+    },
+    {
+      "id": 2,
+      "name": "山田太郎",
+      "username": "taro",
+      "passwordHash": "6844ef1b9f1b68a5e174a07cfb93e8c6:b4817b0e01e9902099a16e0c19be74723a4738d24bf8a1cf83d02f1e09d83085d3565ad8bffe9608877827c5888b9324b7fee25cb0dea5ae6d756efcdf4a26d2",
+      "role": "member",
+      "rewardsGiven": 0
+    }
+  ],
+  "checkins": [
+    {
+      "id": 1,
+      "userId": 2,
+      "date": "2026-08-03"
+    }
+  ],
+  "nextUserId": 3,
+  "nextCheckinId": 2
+}

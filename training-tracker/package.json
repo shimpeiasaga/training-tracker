@@ -1,0 +1,14 @@
+{
+  "name": "training-tracker",
+  "version": "1.0.0",
+  "description": "会員が自宅トレーニングをチェックし、管理者が進捗を確認できるアプリ(依存パッケージ不要、Node.js標準機能のみ)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "seed": "node seed.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {}
+}
