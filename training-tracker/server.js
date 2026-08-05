@@ -123,6 +123,7 @@ const server = http.createServer(async (req, res) => {
     const today = stats.todayStr();
     const streak = stats.currentStreak(checkins);
     const celebrate = url.searchParams.get('celebrate') === '1';
+    const rewardCelebrate = celebrate && url.searchParams.get('reward') === '1';
     return sendHtml(
       res,
       200,
@@ -144,6 +145,8 @@ const server = http.createServer(async (req, res) => {
         userId: user.id,
         celebrate,
         milestoneBadge: celebrate ? stats.justUnlockedBadge(streak) : null,
+        rewardCelebrate,
+        checkinDates: checkins,
       })
     );
   }
@@ -155,8 +158,20 @@ const server = http.createServer(async (req, res) => {
       db.removeCheckin(user.id, today);
       return redirect(res, '/member');
     }
+
+    const beforeCheckins = db.getCheckinsForUser(user.id).map((c) => c.date);
+    const monthCountBefore = stats.currentMonthCount(beforeCheckins);
+
     db.addCheckin(user.id, today);
-    return redirect(res, '/member?celebrate=1');
+
+    const afterCheckins = db.getCheckinsForUser(user.id).map((c) => c.date);
+    const monthCountAfter = stats.currentMonthCount(afterCheckins);
+    const monthlyStreakAfter = stats.currentMonthlyStreak(afterCheckins);
+    // ちょうど今月の目標(10回)に到達し、かつそれが3ヶ月ごとの特典ラインに乗った瞬間かどうか
+    const justHitMonthlyGoal = monthCountBefore < stats.MONTHLY_GOAL && monthCountAfter >= stats.MONTHLY_GOAL;
+    const justEarnedReward = justHitMonthlyGoal && monthlyStreakAfter > 0 && monthlyStreakAfter % stats.REWARD_MONTHS === 0;
+
+    return redirect(res, `/member?celebrate=1${justEarnedReward ? '&reward=1' : ''}`);
   }
 
   if (pathname === '/member/password' && method === 'POST') {
@@ -313,6 +328,7 @@ const server = http.createServer(async (req, res) => {
           rewardsGiven: given,
           rewardsPending: Math.max(0, earned - given),
           badges: stats.streakBadges(memberStreak),
+          checkinDates: checkins,
         })
       );
     }
