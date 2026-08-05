@@ -111,6 +111,30 @@ h1, h2, h3 { margin-top: 0; }
   white-space: nowrap;
   display: none;
 }
+.grid .day .daynum {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.62rem;
+  color: var(--muted);
+}
+.grid .day.checked .daynum { color: #fff; font-weight: 700; }
+
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.history-list li {
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.92rem;
+}
+.history-list li:last-child { border-bottom: none; }
 
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); font-size: 0.92rem; }
@@ -142,7 +166,7 @@ tr:hover { background: #fafcfa; }
   padding: 10px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  font-size: 16px; /* iOSでフォーカス時に勝手に拡大ズームされるのを防ぐ */
+  font-size: 16px; /* iOS縺ｧ繝輔か繝ｼ繧ｫ繧ｹ譎ゅ↓蜍晄焔縺ｫ諡｡螟ｧ繧ｺ繝ｼ繝�縺輔ｌ繧九�繧帝亟縺� */
 }
 
 .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -161,7 +185,7 @@ tr:hover { background: #fafcfa; }
 }
 .login-card { width: 320px; }
 
-/* --- バッジ --- */
+/* --- 繝舌ャ繧ｸ --- */
 .badge-row {
   display: flex;
   gap: 10px;
@@ -187,7 +211,7 @@ tr:hover { background: #fafcfa; }
 .badge-item .icon { font-size: 1.8rem; display: block; margin-bottom: 4px; }
 .badge-item .label { font-size: 0.68rem; color: var(--muted); line-height: 1.2; }
 
-/* --- ランキング --- */
+/* --- 繝ｩ繝ｳ繧ｭ繝ｳ繧ｰ --- */
 .leaderboard { list-style: none; margin: 0; padding: 0; }
 .leaderboard li {
   display: flex;
@@ -218,7 +242,7 @@ tr:hover { background: #fafcfa; }
 .leaderboard .name { flex: 1; }
 .leaderboard .count { font-weight: 700; color: var(--primary); }
 
-/* --- お祝い演出 --- */
+/* --- 縺顔･昴＞貍泌� --- */
 .celebrate-banner {
   background: linear-gradient(135deg, #40916c, #2d6a4f);
   color: #fff;
@@ -230,6 +254,12 @@ tr:hover { background: #fafcfa; }
   font-size: 1.05rem;
 }
 .celebrate-banner .sub { font-weight: 400; font-size: 0.85rem; opacity: 0.9; margin-top: 4px; }
+.celebrate-banner.reward {
+  background: linear-gradient(135deg, #f4a261, #e9a600);
+  font-size: 1.25rem;
+  padding: 22px 20px;
+  box-shadow: 0 0 0 3px #ffe08a inset;
+}
 
 .confetti-piece {
   position: fixed;
@@ -247,7 +277,7 @@ tr:hover { background: #fafcfa; }
   }
 }
 
-/* --- スマホ向けの余白調整(会員は基本スマホ操作を想定) --- */
+/* --- 繧ｹ繝槭�蜷代￠縺ｮ菴咏區隱ｿ謨ｴ(莨壼藤縺ｯ蝓ｺ譛ｬ繧ｹ繝槭�謫堺ｽ懊ｒ諠ｳ螳�) --- */
 @media (max-width: 480px) {
   .container { padding: 14px; }
   .card { padding: 16px; margin-bottom: 14px; }
