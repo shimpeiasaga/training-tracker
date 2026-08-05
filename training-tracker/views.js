@@ -65,8 +65,34 @@ function loginPage(error) {
 
 function gridHtml(grid) {
   return `<div class="grid">${grid
-    .map((d) => `<div class="day ${d.checked ? 'checked' : ''}" title="${d.date}"></div>`)
+    .map((d) => {
+      const dayNum = Number(d.date.slice(8, 10));
+      return `<div class="day ${d.checked ? 'checked' : ''}" title="${d.date}"><span class="daynum">${dayNum}</span></div>`;
+    })
     .join('')}</div>`;
+}
+
+const WEEKDAY_JA = ['日', '月', '火', '水', '木', '金', '土'];
+
+// "2026-08-02" -> "8月2日(日)"
+function formatDateJa(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  const month = d.getUTCMonth() + 1;
+  const day = d.getUTCDate();
+  const weekday = WEEKDAY_JA[d.getUTCDay()];
+  return `${month}月${day}日(${weekday})`;
+}
+
+// 実施した日を新しい順に一覧表示する(「何月何日にできたか」がひと目で分かるように)
+function historyListHtml(checkinDates, limit = 30) {
+  if (!checkinDates.length) {
+    return '<p style="font-size:0.85rem;color:var(--muted);margin:0;">まだ記録がありません</p>';
+  }
+  const sortedDesc = [...checkinDates].sort((a, b) => b.localeCompare(a));
+  const shown = sortedDesc.slice(0, limit);
+  const items = shown.map((d) => `<li>${formatDateJa(d)}</li>`).join('');
+  const more = sortedDesc.length > limit ? `<p style="font-size:0.8rem;color:var(--muted);margin:8px 0 0;">他${sortedDesc.length - limit}件</p>` : '';
+  return `<ul class="history-list">${items}</ul>${more}`;
 }
 
 function badgeRowHtml(badges) {
@@ -81,7 +107,7 @@ function badgeRowHtml(badges) {
     .join('')}</div>`;
 }
 
-function leaderboardHtml(ranked, currentUserId, limit = 5) {
+function leaderboardHtml(ranked, currentUserId, limit = 3) {
   const top = ranked.slice(0, limit);
   const meInTop = top.some((r) => r.id === currentUserId);
   const me = ranked.find((r) => r.id === currentUserId);
@@ -107,17 +133,22 @@ function leaderboardHtml(ranked, currentUserId, limit = 5) {
 }
 
 // 紙吹雪を降らせる、外部ライブラリ不要のお祝い演出
-function confettiScript() {
+// gold=trueだと特典獲得用の豪華な配色・多めの量になる
+function confettiScript(gold = false) {
+  const colors = gold
+    ? ['#ffd700', '#ffb703', '#f4a261', '#e9c46a', '#fff3b0']
+    : ['#40916c', '#2d6a4f', '#ffb703', '#f4a261', '#e76f51', '#8ecae6'];
+  const count = gold ? 80 : 40;
   return `
     (function() {
-      const colors = ['#40916c', '#2d6a4f', '#ffb703', '#f4a261', '#e76f51', '#8ecae6'];
-      for (let i = 0; i < 40; i++) {
+      const colors = ${JSON.stringify(colors)};
+      for (let i = 0; i < ${count}; i++) {
         const piece = document.createElement('div');
         piece.className = 'confetti-piece';
         piece.style.left = Math.random() * 100 + 'vw';
         piece.style.background = colors[Math.floor(Math.random() * colors.length)];
         piece.style.animationDuration = (2 + Math.random() * 1.5) + 's';
-        piece.style.animationDelay = (Math.random() * 0.4) + 's';
+        piece.style.animationDelay = (Math.random() * ${gold ? '0.8' : '0.4'}) + 's';
         document.body.appendChild(piece);
         setTimeout(() => piece.remove(), 4000);
       }
@@ -166,6 +197,8 @@ function memberPage({
   userId,
   celebrate,
   milestoneBadge,
+  rewardCelebrate,
+  checkinDates,
 }) {
   const script = `
     const weekly = ${JSON.stringify(weekly)};
@@ -177,12 +210,14 @@ function memberPage({
       },
       options: { scales: { y: { beginAtZero: true, max: 7, ticks: { stepSize: 1 } } }, plugins: { legend: { display: false } } }
     });
-    ${celebrate ? confettiScript() : ''}`;
+    ${celebrate ? confettiScript(rewardCelebrate) : ''}`;
 
   const celebrateBanner = celebrate
-    ? `<div class="celebrate-banner">
+    ? `<div class="celebrate-banner ${rewardCelebrate ? 'reward' : ''}">
         ${
-          milestoneBadge
+          rewardCelebrate
+            ? `🎁 特典ゲット!<div class="sub">月${MONTHLY_GOAL}回を${REWARD_MONTHS}ヶ月連続で達成しました。管理者に伝えて特典を受け取ってください!</div>`
+            : milestoneBadge
             ? `${milestoneBadge.icon} バッジ「${escapeHtml(milestoneBadge.label)}」を獲得しました!<div class="sub">${milestoneBadge.days}日連続達成です、この調子!</div>`
             : `🎉 今日もチェック完了!<div class="sub">連続${streak}日目、いい調子です</div>`
         }
@@ -217,6 +252,11 @@ function memberPage({
       </div>
       <h3>直近8週間</h3>
       ${gridHtml(grid)}
+    </div>
+
+    <div class="card">
+      <h3>実施した日</h3>
+      ${historyListHtml(checkinDates)}
     </div>
 
     <div class="card">
@@ -302,7 +342,7 @@ function adminPage({ members, teamWeekly, ranked, error, message }) {
 
     <div class="card">
       <h3>🏆 今月のランキング</h3>
-      ${ranked.length ? leaderboardHtml(ranked, null, 5) : '<p style="font-size:0.85rem;color:var(--muted);margin:0;">まだデータがありません</p>'}
+      ${ranked.length ? leaderboardHtml(ranked, null, 3) : '<p style="font-size:0.85rem;color:var(--muted);margin:0;">まだデータがありません</p>'}
     </div>
 
     <div class="card">
@@ -350,7 +390,7 @@ function adminPage({ members, teamWeekly, ranked, error, message }) {
   });
 }
 
-function adminMemberPage({ member, streak, weekCount, total, grid, weekly, monthCount, monthlyStreak, monthlySeries, rewardsEarned, rewardsGiven, rewardsPending, badges }) {
+function adminMemberPage({ member, streak, weekCount, total, grid, weekly, monthCount, monthlyStreak, monthlySeries, rewardsEarned, rewardsGiven, rewardsPending, badges, checkinDates }) {
   const script = `
     const weekly = ${JSON.stringify(weekly)};
     new Chart(document.getElementById('memberChart'), {
@@ -389,6 +429,11 @@ function adminMemberPage({ member, streak, weekCount, total, grid, weekly, month
       </div>
       <h3>直近12週間</h3>
       ${gridHtml(grid)}
+    </div>
+
+    <div class="card">
+      <h3>実施した日</h3>
+      ${historyListHtml(checkinDates)}
     </div>
 
     <div class="card">
