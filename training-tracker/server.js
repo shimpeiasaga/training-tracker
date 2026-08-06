@@ -1,4 +1,4 @@
-// 外部依存パッケージなし(Node.js標準機能のみ)で動くサーバー
+// 外部フレームワークなしで動くサーバー(データ保存はdb.jsが自動でファイル/MongoDBを切り替える)
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -19,9 +19,10 @@ const MIME = { '.css': 'text/css', '.js': 'application/javascript' };
 
 // 初回起動時に管理者アカウントがなければ自動で作る
 // (Renderなどshellが使えないホスティング環境でも、npm run seedを手動実行しなくて済むように)
-function ensureDefaultAdmin() {
-  if (!db.getUserByUsername('admin')) {
-    db.createUser({
+async function ensureDefaultAdmin() {
+  const existing = await db.getUserByUsername('admin');
+  if (!existing) {
+    await db.createUser({
       name: '管理者',
       username: 'admin',
       passwordHash: crypto.hashPassword('admin123'),
@@ -31,7 +32,6 @@ function ensureDefaultAdmin() {
     console.log('※ ログイン後、必ずパスワードを変更してください');
   }
 }
-ensureDefaultAdmin();
 
 function sendHtml(res, status, html, extraHeaders = {}) {
   res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', ...extraHeaders });
@@ -49,11 +49,14 @@ function getCurrentSession(req) {
 }
 
 // 今月のチェック回数で会員をランキングする(同点は同順位)
-function computeMonthlyRanking() {
-  const list = db.getAllMembers().map((m) => {
-    const checkins = db.getCheckinsForUser(m.id).map((c) => c.date);
-    return { id: m.id, name: m.name, count: stats.currentMonthCount(checkins) };
-  });
+async function computeMonthlyRanking() {
+  const members = await db.getAllMembers();
+  const list = await Promise.all(
+    members.map(async (m) => {
+      const checkins = (await db.getCheckinsForUser(m.id)).map((c) => c.date);
+      return { id: m.id, name: m.name, count: stats.currentMonthCount(checkins) };
+    })
+  );
   return stats.rankMembers(list);
 }
 
@@ -95,7 +98,7 @@ const server = http.createServer(async (req, res) => {
 
   if (method === 'POST' && pathname === '/login') {
     const body = await parseBody(req);
-    const u = db.getUserByUsername((body.username || '').trim());
+    const u = await db.getUserByUsername((body.username || '').trim());
     if (!u || !crypto.verifyPassword(body.password || '', u.passwordHash)) {
       return sendHtml(res, 200, views.loginPage('ユーザー名またはパスワードが違います'));
     }
@@ -119,7 +122,7 @@ const server = http.createServer(async (req, res) => {
 
   // --- 会員ページ ---
   if (pathname === '/member' && method === 'GET') {
-    const checkins = db.getCheckinsForUser(user.id).map((c) => c.date);
+    const checkins = (await db.getCheckinsForUser(user.id)).map((c) => c.date);
     const today = stats.todayStr();
     const streak = stats.currentStreak(checkins);
     const celebrate = url.searchParams.get('celebrate') === '1';
@@ -141,7 +144,7 @@ const server = http.createServer(async (req, res) => {
         rewardMonths: stats.REWARD_MONTHS,
         badges: stats.streakBadges(streak),
         nextBadge: stats.nextStreakBadge(streak),
-        ranked: computeMonthlyRanking(),
+        ranked: await computeMonthlyRanking(),
         userId: user.id,
         celebrate,
         milestoneBadge: celebrate ? stats.justUnlockedBadge(streak) : null,
@@ -153,18 +156,18 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname === '/member/checkin' && method === 'POST') {
     const today = stats.todayStr();
-    const alreadyChecked = db.hasCheckinForDate(user.id, today);
+    const alreadyChecked = await db.hasCheckinForDate(user.id, today);
     if (alreadyChecked) {
-      db.removeCheckin(user.id, today);
+      await db.removeCheckin(user.id, today);
       return redirect(res, '/member');
     }
 
-    const beforeCheckins = db.getCheckinsForUser(user.id).map((c) => c.date);
+    const beforeCheckins = (await db.getCheckinsForUser(user.id)).map((c) => c.date);
     const monthCountBefore = stats.currentMonthCount(beforeCheckins);
 
-    db.addCheckin(user.id, today);
+    await db.addCheckin(user.id, today);
 
-    const afterCheckins = db.getCheckinsForUser(user.id).map((c) => c.date);
+    const afterCheckins = (await db.getCheckinsForUser(user.id)).map((c) => c.date);
     const monthCountAfter = stats.currentMonthCount(afterCheckins);
     const monthlyStreakAfter = stats.currentMonthlyStreak(afterCheckins);
     // ちょうど今月の目標(10回)に到達し、かつそれが3ヶ月ごとの特典ラインに乗った瞬間かどうか
@@ -177,7 +180,7 @@ const server = http.createServer(async (req, res) => {
   if (pathname === '/member/password' && method === 'POST') {
     const body = await parseBody(req);
     if (body.newPassword && body.newPassword.length >= 4) {
-      db.updateUserPassword(user.id, crypto.hashPassword(body.newPassword));
+      await db.updateUserPassword(user.id, crypto.hashPassword(body.newPassword));
     }
     return redirect(res, '/member');
   }
@@ -190,33 +193,36 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/admin' && method === 'GET') {
-      const members = db.getAllMembers().map((m) => {
-        const checkins = db.getCheckinsForUser(m.id).map((c) => c.date);
-        const streak = stats.currentStreak(checkins);
-        const monthlyStreak = stats.currentMonthlyStreak(checkins);
-        const earned = stats.rewardsEarned(monthlyStreak);
-        const given = m.rewardsGiven || 0;
-        const unlockedBadges = stats.streakBadges(streak).filter((b) => b.achieved);
-        const topBadge = unlockedBadges.length ? unlockedBadges[unlockedBadges.length - 1] : null;
-        return {
-          id: m.id,
-          name: m.name,
-          username: m.username,
-          streak,
-          weekCount: stats.thisWeekCount(checkins),
-          total: checkins.length,
-          lastDate: checkins.length ? checkins[checkins.length - 1] : null,
-          monthCount: stats.currentMonthCount(checkins),
-          monthGoal: stats.MONTHLY_GOAL,
-          monthlyStreak,
-          rewardsEarned: earned,
-          rewardsGiven: given,
-          rewardsPending: Math.max(0, earned - given),
-          badgeIcon: topBadge ? topBadge.icon : null,
-          badgeLabel: topBadge ? topBadge.label : null,
-        };
-      });
-      const allCheckins = db.getAllCheckins().map((c) => c.date);
+      const allMembers = await db.getAllMembers();
+      const members = await Promise.all(
+        allMembers.map(async (m) => {
+          const checkins = (await db.getCheckinsForUser(m.id)).map((c) => c.date);
+          const streak = stats.currentStreak(checkins);
+          const monthlyStreak = stats.currentMonthlyStreak(checkins);
+          const earned = stats.rewardsEarned(monthlyStreak);
+          const given = m.rewardsGiven || 0;
+          const unlockedBadges = stats.streakBadges(streak).filter((b) => b.achieved);
+          const topBadge = unlockedBadges.length ? unlockedBadges[unlockedBadges.length - 1] : null;
+          return {
+            id: m.id,
+            name: m.name,
+            username: m.username,
+            streak,
+            weekCount: stats.thisWeekCount(checkins),
+            total: checkins.length,
+            lastDate: checkins.length ? checkins[checkins.length - 1] : null,
+            monthCount: stats.currentMonthCount(checkins),
+            monthGoal: stats.MONTHLY_GOAL,
+            monthlyStreak,
+            rewardsEarned: earned,
+            rewardsGiven: given,
+            rewardsPending: Math.max(0, earned - given),
+            badgeIcon: topBadge ? topBadge.icon : null,
+            badgeLabel: topBadge ? topBadge.label : null,
+          };
+        })
+      );
+      const allCheckins = (await db.getAllCheckins()).map((c) => c.date);
       const memberCount = members.length || 1;
       const teamWeekly = stats.weeklySeries(allCheckins, 8).map((w) => ({
         weekStart: w.weekStart,
@@ -228,7 +234,7 @@ const server = http.createServer(async (req, res) => {
         views.adminPage({
           members,
           teamWeekly,
-          ranked: computeMonthlyRanking(),
+          ranked: await computeMonthlyRanking(),
           error: url.searchParams.get('error'),
           message: url.searchParams.get('message'),
         })
@@ -241,10 +247,10 @@ const server = http.createServer(async (req, res) => {
       if (!name || !username || !password) {
         return redirect(res, '/admin?error=' + encodeURIComponent('すべての項目を入力してください'));
       }
-      if (db.getUserByUsername(username.trim())) {
+      if (await db.getUserByUsername(username.trim())) {
         return redirect(res, '/admin?error=' + encodeURIComponent('そのユーザー名は既に使われています'));
       }
-      db.createUser({
+      await db.createUser({
         name: name.trim(),
         username: username.trim(),
         passwordHash: crypto.hashPassword(password),
@@ -255,7 +261,7 @@ const server = http.createServer(async (req, res) => {
 
     let match = pathname.match(/^\/admin\/members\/(\d+)\/delete$/);
     if (match && method === 'POST') {
-      db.deleteUser(match[1]);
+      await db.deleteUser(match[1]);
       return redirect(res, '/admin?message=' + encodeURIComponent('削除しました'));
     }
 
@@ -263,7 +269,7 @@ const server = http.createServer(async (req, res) => {
     if (match && method === 'POST') {
       const body = await parseBody(req);
       if (body.newPassword && body.newPassword.length >= 4) {
-        db.updateUserPassword(match[1], crypto.hashPassword(body.newPassword));
+        await db.updateUserPassword(match[1], crypto.hashPassword(body.newPassword));
         return redirect(res, '/admin?message=' + encodeURIComponent('パスワードを再設定しました'));
       }
       return redirect(res, '/admin?error=' + encodeURIComponent('パスワードは4文字以上にしてください'));
@@ -271,12 +277,12 @@ const server = http.createServer(async (req, res) => {
 
     match = pathname.match(/^\/admin\/members\/(\d+)\/reward$/);
     if (match && method === 'POST') {
-      db.incrementRewardsGiven(match[1]);
+      await db.incrementRewardsGiven(match[1]);
       return redirect(res, '/admin?message=' + encodeURIComponent('特典を渡した記録を追加しました'));
     }
 
     if (pathname === '/admin/backup' && method === 'GET') {
-      const raw = db.exportRaw();
+      const raw = await db.exportRaw();
       const filename = `training-tracker-backup-${stats.todayStr()}.json`;
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
@@ -292,7 +298,7 @@ const server = http.createServer(async (req, res) => {
         if (!file || !file.content || !file.content.length) {
           return redirect(res, '/admin?error=' + encodeURIComponent('復元するファイルを選択してください'));
         }
-        db.importRaw(file.content.toString('utf8'));
+        await db.importRaw(file.content.toString('utf8'));
         return redirect(res, '/admin?message=' + encodeURIComponent('バックアップからデータを復元しました'));
       } catch (err) {
         return redirect(res, '/admin?error=' + encodeURIComponent('復元に失敗しました。ファイルの形式を確認してください'));
@@ -301,12 +307,12 @@ const server = http.createServer(async (req, res) => {
 
     match = pathname.match(/^\/admin\/member\/(\d+)$/);
     if (match && method === 'GET') {
-      const member = db.getUserById(match[1]);
+      const member = await db.getUserById(match[1]);
       if (!member || member.role !== 'member') {
         res.writeHead(404);
         return res.end('会員が見つかりません');
       }
-      const checkins = db.getCheckinsForUser(member.id).map((c) => c.date);
+      const checkins = (await db.getCheckinsForUser(member.id)).map((c) => c.date);
       const memberStreak = stats.currentStreak(checkins);
       const monthlyStreak = stats.currentMonthlyStreak(checkins);
       const earned = stats.rewardsEarned(monthlyStreak);
@@ -338,6 +344,14 @@ const server = http.createServer(async (req, res) => {
   res.end('Not found');
 });
 
-server.listen(PORT, () => {
-  console.log(`training-tracker running at http://localhost:${PORT}`);
-});
+(async () => {
+  try {
+    await ensureDefaultAdmin();
+    server.listen(PORT, () => {
+      console.log(`training-tracker running at http://localhost:${PORT} (backend: ${db.backend})`);
+    });
+  } catch (err) {
+    console.error('起動に失敗しました:', err.message);
+    process.exit(1);
+  }
+})();
