@@ -232,6 +232,14 @@ function memberPage({
     ${celebrateBanner}
 
     <div class="card">
+      <h3>バッジコレクション</h3>
+      ${badgeRowHtml(badges)}
+      <p style="font-size:0.85rem;color:var(--muted);margin:10px 0 0;">
+        ${nextBadge ? `次のバッジ「${nextBadge.icon} ${escapeHtml(nextBadge.label)}」まであと${nextBadge.days - streak}日` : 'すべてのバッジを獲得しました!すごい継続力です 👑'}
+      </p>
+    </div>
+
+    <div class="card">
       <h2>今日のトレーニング (${today})</h2>
       <form method="POST" action="/member/checkin">
         <button class="checkin-btn ${checkedToday ? 'checked' : ''}" type="submit">
@@ -257,14 +265,6 @@ function memberPage({
     <div class="card">
       <h3>実施した日</h3>
       ${historyListHtml(checkinDates)}
-    </div>
-
-    <div class="card">
-      <h3>バッジコレクション</h3>
-      ${badgeRowHtml(badges)}
-      <p style="font-size:0.85rem;color:var(--muted);margin:10px 0 0;">
-        ${nextBadge ? `次のバッジ「${nextBadge.icon} ${escapeHtml(nextBadge.label)}」まであと${nextBadge.days - streak}日` : 'すべてのバッジを獲得しました!すごい継続力です 👑'}
-      </p>
     </div>
 
     <div class="card">
