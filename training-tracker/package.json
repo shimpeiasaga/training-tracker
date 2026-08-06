@@ -8,7 +8,7 @@
     "seed": "node seed.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": "20.x"
   },
   "dependencies": {
     "mongodb": "^6.10.0"
