@@ -140,6 +140,7 @@ function rewardsEarned(monthlyStreak) {
 
 // --- 連続日数バッジ(達成すると気分が上がるやつ) ---
 const STREAK_BADGES = [
+  { days: 1, icon: '⭐', label: 'はじめの一歩' },
   { days: 3, icon: '🌱', label: '継続の芽生え' },
   { days: 7, icon: '🔥', label: '1週間達成' },
   { days: 14, icon: '⚡', label: '2週間の勢い' },
