@@ -1,7 +1,7 @@
 {
   "name": "training-tracker",
   "version": "1.0.0",
-  "description": "会員が自宅トレーニングをチェックし、管理者が進捗を確認できるアプリ(依存パッケージ不要、Node.js標準機能のみ)",
+  "description": "会員が自宅トレーニングをチェックし、管理者が進捗を確認できるアプリ",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -10,5 +10,7 @@
   "engines": {
     "node": ">=18"
   },
-  "dependencies": {}
+  "dependencies": {
+    "mongodb": "^6.10.0"
+  }
 }
