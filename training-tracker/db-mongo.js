@@ -10,10 +10,18 @@ function getClient() {
     throw new Error('MONGODB_URI が設定されていません。Renderの環境変数を確認してください。');
   }
   if (!clientPromise) {
-    const client = new MongoClient(uri);
+    // family: 4 で IPv4 接続を強制する(Renderなど一部のホスティング環境でIPv6経由だと
+    // MongoDB AtlasとのTLSハンドシェイクが失敗する既知の問題への対策)
+    const client = new MongoClient(uri, {
+      family: 4,
+      serverSelectionTimeoutMS: 20000,
+    });
     clientPromise = client.connect().then(() => {
       console.log('MongoDB Atlas に接続しました');
       return client;
+    }).catch((err) => {
+      clientPromise = null;
+      throw err;
     });
   }
   return clientPromise;
