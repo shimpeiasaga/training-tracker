@@ -34,7 +34,10 @@ ${script ? `<script>${script}</script>` : ''}
 function topbar(label, showLogout = true) {
   return `<div class="topbar">
     <span class="brand">${label}</span>
-    ${showLogout ? `<form method="POST" action="/logout"><button type="submit">ログアウト</button></form>` : ''}
+    <div class="topbar-actions">
+      <a href="/board">💬 みんなの掲示板</a>
+      ${showLogout ? `<form method="POST" action="/logout"><button type="submit">ログアウト</button></form>` : ''}
+    </div>
   </div>`;
 }
 
@@ -67,7 +70,9 @@ function gridHtml(grid) {
   return `<div class="grid">${grid
     .map((d) => {
       const dayNum = Number(d.date.slice(8, 10));
-      return `<div class="day ${d.checked ? 'checked' : ''}" title="${d.date}"><span class="daynum">${dayNum}</span></div>`;
+      const dow = new Date(d.date + 'T00:00:00Z').getUTCDay(); // 0=日, 6=土
+      const weekendCls = dow === 0 ? 'sun' : dow === 6 ? 'sat' : '';
+      return `<div class="day ${d.checked ? 'checked' : ''} ${weekendCls}" title="${d.date}"><span class="daynum">${dayNum}</span></div>`;
     })
     .join('')}</div>`;
 }
@@ -93,6 +98,38 @@ function historyListHtml(checkinDates, limit = 30) {
   const items = shown.map((d) => `<li>${formatDateJa(d)}</li>`).join('');
   const more = sortedDesc.length > limit ? `<p style="font-size:0.8rem;color:var(--muted);margin:8px 0 0;">他${sortedDesc.length - limit}件</p>` : '';
   return `<ul class="history-list">${items}</ul>${more}`;
+}
+
+// 獲得ランクのログ("いつ達成したか"の一覧、新しい順)
+function badgeLogHtml(badgeLog) {
+  if (!badgeLog.length) {
+    return '<p style="font-size:0.85rem;color:var(--muted);margin:0;">まだ獲得したランクはありません</p>';
+  }
+  const sorted = [...badgeLog].sort((a, b) => b.unlockedDate.localeCompare(a.unlockedDate));
+  const items = sorted
+    .map(
+      (b) =>
+        `<li>${b.icon} <strong>${escapeHtml(b.label)}</strong> にランクアップ! <span style="color:var(--muted);">(${formatDateJa(b.unlockedDate)})</span></li>`
+    )
+    .join('');
+  return `<ul class="history-list">${items}</ul>`;
+}
+
+// 管理者⇔会員のメッセージスレッド
+function messageThreadHtml(messages) {
+  if (!messages.length) {
+    return '<p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">まだメッセージはありません</p>';
+  }
+  const items = messages
+    .map(
+      (m) => `
+      <div class="msg-bubble ${m.senderRole === 'admin' ? 'from-admin' : 'from-member'}">
+        <div class="msg-meta">${escapeHtml(m.senderName)} ・ ${escapeHtml(m.createdAt)}</div>
+        <div class="msg-body">${escapeHtml(m.body)}</div>
+      </div>`
+    )
+    .join('');
+  return `<div class="msg-thread">${items}</div>`;
 }
 
 function badgeRowHtml(badges) {
@@ -184,6 +221,7 @@ function memberPage({
   today,
   checkedToday,
   streak,
+  totalDays,
   weekCount,
   grid,
   weekly,
@@ -199,6 +237,8 @@ function memberPage({
   milestoneBadge,
   rewardCelebrate,
   checkinDates,
+  badgeLog,
+  messages,
 }) {
   const script = `
     const weekly = ${JSON.stringify(weekly)};
@@ -218,7 +258,7 @@ function memberPage({
           rewardCelebrate
             ? `🎁 特典ゲット!<div class="sub">月${MONTHLY_GOAL}回を${REWARD_MONTHS}ヶ月連続で達成しました。管理者に伝えて特典を受け取ってください!</div>`
             : milestoneBadge
-            ? `${milestoneBadge.icon} バッジ「${escapeHtml(milestoneBadge.label)}」を獲得しました!<div class="sub">${milestoneBadge.days}日連続達成です、この調子!</div>`
+            ? `${milestoneBadge.icon} バッジ「${escapeHtml(milestoneBadge.label)}」を獲得しました!<div class="sub">累計${milestoneBadge.days}日達成です、この調子!</div>`
             : `🎉 今日もチェック完了!<div class="sub">連続${streak}日目、いい調子です</div>`
         }
       </div>`
@@ -235,7 +275,7 @@ function memberPage({
       <h3>バッジコレクション</h3>
       ${badgeRowHtml(badges)}
       <p style="font-size:0.85rem;color:var(--muted);margin:10px 0 0;">
-        ${nextBadge ? `次のバッジ「${nextBadge.icon} ${escapeHtml(nextBadge.label)}」まであと${nextBadge.days - streak}日` : 'すべてのバッジを獲得しました!すごい継続力です 👑'}
+        ${nextBadge ? `次のバッジ「${nextBadge.icon} ${escapeHtml(nextBadge.label)}」まであと累計${nextBadge.days - totalDays}日` : 'すべてのバッジを獲得しました!すごい継続力です 👑'}
       </p>
     </div>
 
@@ -258,13 +298,18 @@ function memberPage({
         <div class="stat-box"><div class="num">${streak}</div><div class="label">連続日数</div></div>
         <div class="stat-box"><div class="num">${weekCount}/7</div><div class="label">今週の実施回数</div></div>
       </div>
-      <h3>直近8週間</h3>
+      <h3>直近4週間</h3>
       ${gridHtml(grid)}
     </div>
 
     <div class="card">
       <h3>実施した日</h3>
       ${historyListHtml(checkinDates)}
+    </div>
+
+    <div class="card">
+      <h3>🎖 ランクアップ履歴</h3>
+      ${badgeLogHtml(badgeLog)}
     </div>
 
     <div class="card">
@@ -275,6 +320,18 @@ function memberPage({
     <div class="card">
       <h3>週ごとの実施回数</h3>
       <canvas id="weeklyChart" height="120"></canvas>
+    </div>
+
+    <div class="card" id="messages">
+      <h3>📩 管理者とのメッセージ</h3>
+      ${messageThreadHtml(messages)}
+      <form method="POST" action="/member/messages" class="inline-form">
+        <div class="form-row">
+          <label>管理者にメッセージを送る</label>
+          <input type="text" name="body" maxlength="500" required>
+        </div>
+        <button class="btn primary" type="submit">送信</button>
+      </form>
     </div>
 
     <div class="card">
@@ -390,7 +447,7 @@ function adminPage({ members, teamWeekly, ranked, error, message }) {
   });
 }
 
-function adminMemberPage({ member, streak, weekCount, total, grid, weekly, monthCount, monthlyStreak, monthlySeries, rewardsEarned, rewardsGiven, rewardsPending, badges, checkinDates }) {
+function adminMemberPage({ member, streak, weekCount, total, grid, weekly, monthCount, monthlyStreak, monthlySeries, rewardsEarned, rewardsGiven, rewardsPending, badges, checkinDates, badgeLog, messages }) {
   const script = `
     const weekly = ${JSON.stringify(weekly)};
     new Chart(document.getElementById('memberChart'), {
@@ -417,7 +474,7 @@ function adminMemberPage({ member, streak, weekCount, total, grid, weekly, month
 
   return layout({
     title: `${escapeHtml(member.name)} の詳細 | トレーニング記録`,
-    topbar: `<div class="topbar"><span class="brand"><a href="/admin">&larr; 管理者ダッシュボード</a></span><form method="POST" action="/logout"><button type="submit">ログアウト</button></form></div>`,
+    topbar: `<div class="topbar"><span class="brand"><a href="/admin">&larr; 管理者ダッシュボード</a></span><div class="topbar-actions"><a href="/board">💬 みんなの掲示板</a><form method="POST" action="/logout"><button type="submit">ログアウト</button></form></div></div>`,
     script,
     body: `
     <div class="card">
@@ -427,7 +484,7 @@ function adminMemberPage({ member, streak, weekCount, total, grid, weekly, month
         <div class="stat-box"><div class="num">${weekCount}/7</div><div class="label">今週</div></div>
         <div class="stat-box"><div class="num">${total}</div><div class="label">累計実施回数</div></div>
       </div>
-      <h3>直近12週間</h3>
+      <h3>直近4週間</h3>
       ${gridHtml(grid)}
     </div>
 
@@ -442,8 +499,25 @@ function adminMemberPage({ member, streak, weekCount, total, grid, weekly, month
     </div>
 
     <div class="card">
+      <h3>🎖 ランクアップ履歴</h3>
+      ${badgeLogHtml(badgeLog)}
+    </div>
+
+    <div class="card">
       <h3>週ごとの実施回数</h3>
       <canvas id="memberChart" height="120"></canvas>
+    </div>
+
+    <div class="card" id="messages">
+      <h3>📩 ${escapeHtml(member.name)} さんとのメッセージ</h3>
+      ${messageThreadHtml(messages)}
+      <form method="POST" action="/admin/members/${member.id}/messages" class="inline-form">
+        <div class="form-row">
+          <label>メッセージを送る</label>
+          <input type="text" name="body" maxlength="500" required>
+        </div>
+        <button class="btn primary" type="submit">送信</button>
+      </form>
     </div>
 
     <div class="card">
@@ -476,4 +550,55 @@ function adminMemberPage({ member, streak, weekCount, total, grid, weekly, month
   });
 }
 
-module.exports = { escapeHtml, loginPage, memberPage, adminPage, adminMemberPage };
+// 会員なら誰でも投稿できる、返信はスタッフ(管理者)のみの掲示板
+function boardPage({ posts, userRole, userName, error }) {
+  const postsHtml = posts.length
+    ? posts
+        .map(
+          (p) => `
+      <div class="card board-post">
+        <div class="board-post-meta"><strong>${escapeHtml(p.authorName)}</strong> <span>${escapeHtml(p.createdAt)}</span></div>
+        <div class="board-post-body">${escapeHtml(p.body)}</div>
+        ${(p.replies || [])
+          .map(
+            (r) => `
+          <div class="board-reply">
+            <div class="board-reply-meta">🛠 ${escapeHtml(r.adminName)}(スタッフ) <span>${escapeHtml(r.createdAt)}</span></div>
+            <div class="board-reply-body">${escapeHtml(r.body)}</div>
+          </div>`
+          )
+          .join('')}
+        ${
+          userRole === 'admin'
+            ? `<form method="POST" action="/board/${p.id}/reply" class="inline-form board-reply-form">
+                <div class="form-row"><input type="text" name="body" placeholder="スタッフとして返信する" maxlength="500" required></div>
+                <button class="btn" type="submit">返信</button>
+              </form>`
+            : ''
+        }
+      </div>`
+        )
+        .join('')
+    : '<div class="card"><p style="font-size:0.85rem;color:var(--muted);margin:0;">まだ投稿がありません</p></div>';
+
+  return layout({
+    title: 'みんなの掲示板 | トレーニング記録',
+    topbar: `<div class="topbar"><span class="brand"><a href="${userRole === 'admin' ? '/admin' : '/member'}">&larr; 戻る</a></span><form method="POST" action="/logout"><button type="submit">ログアウト</button></form></div>`,
+    body: `
+    ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
+    <div class="card">
+      <h2>💬 みんなの掲示板</h2>
+      <p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">会員なら誰でも自由に投稿できます。投稿への返信はスタッフのみ行えます。</p>
+      <form method="POST" action="/board/post" class="inline-form">
+        <div class="form-row">
+          <label>投稿する(${escapeHtml(userName)}として)</label>
+          <input type="text" name="body" maxlength="500" required autofocus>
+        </div>
+        <button class="btn primary" type="submit">投稿</button>
+      </form>
+    </div>
+    ${postsHtml}`,
+  });
+}
+
+module.exports = { escapeHtml, loginPage, memberPage, adminPage, adminMemberPage, boardPage };
