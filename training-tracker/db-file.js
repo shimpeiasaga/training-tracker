@@ -9,13 +9,27 @@ const DATA_FILE = path.join(DATA_DIR, 'data.json');
 function ensureDataFile() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   if (!fs.existsSync(DATA_FILE)) {
-    fs.writeFileSync(DATA_FILE, JSON.stringify({ users: [], checkins: [], nextUserId: 1, nextCheckinId: 1 }, null, 2));
+    fs.writeFileSync(
+      DATA_FILE,
+      JSON.stringify(
+        { users: [], checkins: [], messages: [], posts: [], nextUserId: 1, nextCheckinId: 1, nextMessageId: 1, nextPostId: 1, nextReplyId: 1 },
+        null,
+        2
+      )
+    );
   }
 }
 
 function load() {
   ensureDataFile();
-  return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+  const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+  // 古いバックアップ/データファイルにも新しい項目が無くても動くようにする
+  if (!Array.isArray(data.messages)) data.messages = [];
+  if (!Array.isArray(data.posts)) data.posts = [];
+  if (typeof data.nextMessageId !== 'number') data.nextMessageId = 1;
+  if (typeof data.nextPostId !== 'number') data.nextPostId = 1;
+  if (typeof data.nextReplyId !== 'number') data.nextReplyId = 1;
+  return data;
 }
 
 function save(data) {
@@ -99,10 +113,50 @@ function getAllCheckins() {
   return load().checkins;
 }
 
+// --- 管理者⇔会員の個別メッセージ ---
+function getMessagesForMember(memberId) {
+  return load()
+    .messages.filter((m) => m.memberId === Number(memberId))
+    .sort((a, b) => a.id - b.id);
+}
+
+function addMessage({ memberId, senderRole, senderName, body, createdAt }) {
+  const data = load();
+  const message = { id: data.nextMessageId++, memberId: Number(memberId), senderRole, senderName, body, createdAt };
+  data.messages.push(message);
+  save(data);
+  return message;
+}
+
+// --- 会員向け掲示板(会員が投稿、返信できるのは管理者のみ) ---
+function getBoardPosts() {
+  return load()
+    .posts.slice()
+    .sort((a, b) => b.id - a.id);
+}
+
+function addBoardPost({ authorId, authorName, body, createdAt }) {
+  const data = load();
+  const post = { id: data.nextPostId++, authorId: Number(authorId), authorName, body, createdAt, replies: [] };
+  data.posts.push(post);
+  save(data);
+  return post;
+}
+
+function addBoardReply({ postId, adminName, body, createdAt }) {
+  const data = load();
+  const post = data.posts.find((p) => p.id === Number(postId));
+  if (!post) throw new Error('投稿が見つかりません');
+  if (!Array.isArray(post.replies)) post.replies = [];
+  const reply = { id: data.nextReplyId++, adminName, body, createdAt };
+  post.replies.push(reply);
+  save(data);
+  return reply;
+}
+
 // --- バックアップ / 復元 ---
 function exportRaw() {
-  ensureDataFile();
-  return fs.readFileSync(DATA_FILE, 'utf8');
+  return JSON.stringify(load(), null, 2);
 }
 
 function importRaw(jsonStr) {
@@ -115,6 +169,18 @@ function importRaw(jsonStr) {
   }
   if (typeof parsed.nextCheckinId !== 'number') {
     parsed.nextCheckinId = parsed.checkins.reduce((max, c) => Math.max(max, c.id + 1), 1);
+  }
+  if (!Array.isArray(parsed.messages)) parsed.messages = [];
+  if (!Array.isArray(parsed.posts)) parsed.posts = [];
+  if (typeof parsed.nextMessageId !== 'number') {
+    parsed.nextMessageId = parsed.messages.reduce((max, m) => Math.max(max, m.id + 1), 1);
+  }
+  if (typeof parsed.nextPostId !== 'number') {
+    parsed.nextPostId = parsed.posts.reduce((max, p) => Math.max(max, p.id + 1), 1);
+  }
+  if (typeof parsed.nextReplyId !== 'number') {
+    const allReplyIds = parsed.posts.flatMap((p) => (p.replies || []).map((r) => r.id));
+    parsed.nextReplyId = allReplyIds.length ? Math.max(...allReplyIds) + 1 : 1;
   }
   save(parsed);
 }
@@ -133,6 +199,11 @@ module.exports = {
   removeCheckin,
   getAllCheckins,
   incrementRewardsGiven,
+  getMessagesForMember,
+  addMessage,
+  getBoardPosts,
+  addBoardPost,
+  addBoardReply,
   exportRaw,
   importRaw,
 };
