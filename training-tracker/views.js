@@ -109,11 +109,13 @@ function loginPage(error) {
 }
 
 const WEEKDAY_JA = ['日', '月', '火', '水', '木', '金', '土'];
+// カレンダーのヘッダー表示専用(月曜始まり)。formatDateJa等はgetUTCDay()の並び(日曜始まり)のままでよいので別配列にする
+const WEEKDAY_HEADER_MON_START = ['月', '火', '水', '木', '金', '土', '日'];
 
-// 月間カレンダー表示(曜日ヘッダー付き)。gridはstats.monthCalendar()の出力(nullは空白セル)
+// 月間カレンダー表示(曜日ヘッダー付き、月曜始まり)。gridはstats.monthCalendar()の出力(nullは空白セル)
 function gridHtml(grid) {
-  const head = WEEKDAY_JA.map(
-    (w, i) => `<div class="day-head ${i === 0 ? 'sun' : ''} ${i === 6 ? 'sat' : ''}">${w}</div>`
+  const head = WEEKDAY_HEADER_MON_START.map(
+    (w, i) => `<div class="day-head ${i === 5 ? 'sat' : ''} ${i === 6 ? 'sun' : ''}">${w}</div>`
   ).join('');
   const cells = grid
     .map((c) => {
@@ -177,7 +179,9 @@ function badgeLogHtml(badgeLog) {
 }
 
 // 管理者⇔会員のメッセージスレッド
-function messageThreadHtml(messages) {
+// viewerRole: このページを見ている人の役割('admin'|'member')。自分が送信したメッセージにだけ削除ボタンを出す
+// deleteBasePath: 削除フォームの送信先のベースパス(末尾に "/{メッセージID}/delete" を付けて使う)
+function messageThreadHtml(messages, { viewerRole, deleteBasePath } = {}) {
   if (!messages.length) {
     return '<p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">まだメッセージはありません</p>';
   }
@@ -185,7 +189,16 @@ function messageThreadHtml(messages) {
     .map(
       (m) => `
       <div class="msg-bubble ${m.senderRole === 'admin' ? 'from-admin' : 'from-member'}">
-        <div class="msg-meta">${escapeHtml(m.senderName)} ・ ${escapeHtml(m.createdAt)}</div>
+        <div class="msg-meta">
+          <span>${escapeHtml(m.senderName)} ・ ${escapeHtml(m.createdAt)}</span>
+          ${
+            viewerRole && deleteBasePath && m.senderRole === viewerRole
+              ? `<form method="POST" action="${deleteBasePath}/${m.id}/delete" style="display:inline;" onsubmit="return confirm('このメッセージを削除しますか？');">
+                  <button class="btn danger" type="submit" style="padding:0 6px;font-size:0.68rem;margin-left:6px;">削除</button>
+                </form>`
+              : ''
+          }
+        </div>
         <div class="msg-body">${escapeHtml(m.body)}</div>
       </div>`
     )
@@ -396,7 +409,7 @@ function memberPage({
 
     <div class="card" id="messages">
       <h3>📩 管理者とのメッセージ</h3>
-      ${messageThreadHtml(messages)}
+      ${messageThreadHtml(messages, { viewerRole: 'member', deleteBasePath: '/member/messages' })}
       <form method="POST" action="/member/messages" class="inline-form">
         <div class="form-row">
           <label>管理者にメッセージを送る</label>
@@ -604,7 +617,7 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
 
     <div class="card" id="messages">
       <h3>📩 ${escapeHtml(member.name)} さんとのメッセージ</h3>
-      ${messageThreadHtml(messages)}
+      ${messageThreadHtml(messages, { viewerRole: 'admin', deleteBasePath: `/admin/members/${member.id}/messages` })}
       <form method="POST" action="/admin/members/${member.id}/messages" class="inline-form">
         <div class="form-row">
           <label>メッセージを送る</label>
