@@ -6,6 +6,11 @@ function todayStr() {
   return new Date(Date.now() + TZ_OFFSET_MS).toISOString().slice(0, 10);
 }
 
+// メッセージ・掲示板の投稿日時("YYYY-MM-DD HH:MM"、日本時間)
+function nowStr() {
+  return new Date(Date.now() + TZ_OFFSET_MS).toISOString().slice(0, 16).replace('T', ' ');
+}
+
 function addDays(dateStr, n) {
   const d = new Date(dateStr + 'T00:00:00Z');
   d.setUTCDate(d.getUTCDate() + n);
@@ -138,15 +143,15 @@ function rewardsEarned(monthlyStreak) {
   return Math.floor(monthlyStreak / REWARD_MONTHS);
 }
 
-// --- 連続日数バッジ(達成すると気分が上がるやつ) ---
+// --- 累計実施日数ランク(連続でなくてもOK、ランクが上がっていく仕組み) ---
 const STREAK_BADGES = [
-  { days: 1, icon: '⭐', label: 'はじめの一歩' },
-  { days: 3, icon: '🌱', label: '継続の芽生え' },
-  { days: 7, icon: '🔥', label: '1週間達成' },
-  { days: 14, icon: '⚡', label: '2週間の勢い' },
-  { days: 30, icon: '🏅', label: '1ヶ月マスター' },
-  { days: 60, icon: '💎', label: '2ヶ月の達人' },
-  { days: 100, icon: '👑', label: '100日レジェンド' },
+  { days: 1, icon: '🔰', label: 'ビギナー' },
+  { days: 3, icon: '🥉', label: 'ブロンズ' },
+  { days: 7, icon: '🥈', label: 'シルバー' },
+  { days: 14, icon: '🥇', label: 'ゴールド' },
+  { days: 30, icon: '💎', label: 'プラチナ' },
+  { days: 60, icon: '💠', label: 'ダイヤモンド' },
+  { days: 100, icon: '👑', label: 'レジェンド' },
 ];
 
 function streakBadges(streak) {
@@ -161,6 +166,16 @@ function nextStreakBadge(streak) {
 // 今の連続日数が、ちょうどバッジのしきい値と一致するか(達成の瞬間かどうか)
 function justUnlockedBadge(streak) {
   return STREAK_BADGES.find((b) => b.days === streak) || null;
+}
+
+// 獲得済みバッジを「いつ達成したか」付きで一覧にする(達成日が古い順)
+// 累計N日目に到達した日 = チェックイン日を昇順に並べたときのN番目の日付
+function badgeUnlockLog(checkinDates) {
+  const sorted = [...checkinDates].sort();
+  return STREAK_BADGES.filter((b) => sorted.length >= b.days).map((b) => ({
+    ...b,
+    unlockedDate: sorted[b.days - 1],
+  }));
 }
 
 // 同点は同順位になるランキング(1,2,2,4方式)
@@ -179,6 +194,7 @@ function rankMembers(list) {
 
 module.exports = {
   todayStr,
+  nowStr,
   addDays,
   weekStart,
   weeklySeries,
@@ -198,5 +214,6 @@ module.exports = {
   streakBadges,
   nextStreakBadge,
   justUnlockedBadge,
+  badgeUnlockLog,
   rankMembers,
 };
