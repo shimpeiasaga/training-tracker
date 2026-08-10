@@ -1,29 +1,11 @@
-// 超シンプルなインメモリセッション管理(外部依存なし)
-// ※サーバーを再起動するとログイン状態はリセットされます(小規模利用なので許容)
+// Cookie関連のユーティリティ + セッションIDの発行
+// セッション自体の保存(作成・取得・削除)はdb.js経由でファイル/MongoDBに保存する
+// (以前はこのファイル内のメモリ上のMapに保存していたが、Renderがスリープ・再起動すると
+//  ログイン状態が全員分消えてしまうため、他のデータと同じくDB側に永続化するようにした)
 const crypto = require('crypto');
 
-const sessions = new Map(); // sessionId -> { user, expires }
-const SESSION_TTL = 1000 * 60 * 60 * 24 * 30; // 30日
-
-function createSession(user) {
-  const id = crypto.randomBytes(24).toString('hex');
-  sessions.set(id, { user, expires: Date.now() + SESSION_TTL });
-  return id;
-}
-
-function getSession(id) {
-  if (!id) return null;
-  const s = sessions.get(id);
-  if (!s) return null;
-  if (s.expires < Date.now()) {
-    sessions.delete(id);
-    return null;
-  }
-  return s;
-}
-
-function destroySession(id) {
-  sessions.delete(id);
+function generateSessionId() {
+  return crypto.randomBytes(24).toString('hex');
 }
 
 function parseCookies(req) {
@@ -48,4 +30,4 @@ function clearCookieHeader() {
   return 'sid=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax';
 }
 
-module.exports = { createSession, getSession, destroySession, parseCookies, cookieHeader, clearCookieHeader };
+module.exports = { generateSessionId, parseCookies, cookieHeader, clearCookieHeader };
