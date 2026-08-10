@@ -94,11 +94,38 @@ h1, h2, h3 { margin-top: 0; }
 }
 .checkin-btn.checked { background: var(--muted); }
 
-.grid {
+.calendar-nav {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+}
+.calendar-nav .btn[disabled] {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.grid-head {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
   gap: 4px;
   margin-top: 12px;
+}
+.day-head {
+  text-align: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--muted);
+  padding-bottom: 4px;
+}
+.day-head.sat { color: #1d4ed8; }
+.day-head.sun { color: #dc2626; }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  margin-top: 4px;
 }
 .grid .day {
   aspect-ratio: 1;
@@ -106,6 +133,7 @@ h1, h2, h3 { margin-top: 0; }
   background: #e6ece7;
   position: relative;
 }
+.grid .day.empty { background: transparent; }
 .grid .day.checked { background: var(--primary-light); }
 .grid .day .tip {
   position: absolute;
@@ -287,6 +315,38 @@ tr:hover { background: #fafcfa; }
     transform: translateY(105vh) rotate(540deg);
     opacity: 0.3;
   }
+}
+
+/* --- 莨壼藤蟆ら畑縺ｮ蜍慕判 --- */
+.video-list {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.video-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.video-item-head h4 { margin: 0; font-size: 0.95rem; }
+.video-item-head form { margin: 0; }
+.video-embed {
+  position: relative;
+  width: 100%;
+  padding-top: 56.25%; /* 16:9 */
+  border-radius: 8px;
+  overflow: hidden;
+  background: #000;
+}
+.video-embed iframe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
 }
 
 /* --- 邂｡逅��∑莨壼藤縺ｮ繝｡繝�そ繝ｼ繧ｸ --- */
