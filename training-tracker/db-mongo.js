@@ -149,13 +149,77 @@ async function getAllCheckins() {
   return docs.map(mapCheckin);
 }
 
+// --- 管理者⇔会員の個別メッセージ ---
+function mapMessage(doc) {
+  if (!doc) return undefined;
+  return { id: doc._id, memberId: doc.memberId, senderRole: doc.senderRole, senderName: doc.senderName, body: doc.body, createdAt: doc.createdAt };
+}
+
+async function getMessagesForMember(memberId) {
+  const db = await getDb();
+  const docs = await db
+    .collection('messages')
+    .find({ memberId: Number(memberId) })
+    .sort({ _id: 1 })
+    .toArray();
+  return docs.map(mapMessage);
+}
+
+async function addMessage({ memberId, senderRole, senderName, body, createdAt }) {
+  const db = await getDb();
+  const id = await nextSeq('messages');
+  const doc = { _id: id, memberId: Number(memberId), senderRole, senderName, body, createdAt };
+  await db.collection('messages').insertOne(doc);
+  return mapMessage(doc);
+}
+
+// --- 会員向け掲示板(会員が投稿、返信できるのは管理者のみ) ---
+function mapPost(doc) {
+  if (!doc) return undefined;
+  return {
+    id: doc._id,
+    authorId: doc.authorId,
+    authorName: doc.authorName,
+    body: doc.body,
+    createdAt: doc.createdAt,
+    replies: doc.replies || [],
+  };
+}
+
+async function getBoardPosts() {
+  const db = await getDb();
+  const docs = await db.collection('posts').find({}).sort({ _id: -1 }).toArray();
+  return docs.map(mapPost);
+}
+
+async function addBoardPost({ authorId, authorName, body, createdAt }) {
+  const db = await getDb();
+  const id = await nextSeq('posts');
+  const doc = { _id: id, authorId: Number(authorId), authorName, body, createdAt, replies: [] };
+  await db.collection('posts').insertOne(doc);
+  return mapPost(doc);
+}
+
+async function addBoardReply({ postId, adminName, body, createdAt }) {
+  const db = await getDb();
+  const id = await nextSeq('replies');
+  const reply = { id, adminName, body, createdAt };
+  await db.collection('posts').updateOne({ _id: Number(postId) }, { $push: { replies: reply } });
+  return reply;
+}
+
 // --- バックアップ / 復元 ---
 async function exportRaw() {
   const db = await getDb();
   const users = await db.collection('users').find({}).toArray();
   const checkins = await db.collection('checkins').find({}).toArray();
+  const messages = await db.collection('messages').find({}).toArray();
+  const posts = await db.collection('posts').find({}).toArray();
   const usersCounter = await db.collection('counters').findOne({ _id: 'users' });
   const checkinsCounter = await db.collection('counters').findOne({ _id: 'checkins' });
+  const messagesCounter = await db.collection('counters').findOne({ _id: 'messages' });
+  const postsCounter = await db.collection('counters').findOne({ _id: 'posts' });
+  const repliesCounter = await db.collection('counters').findOne({ _id: 'replies' });
   const data = {
     users: users.map((u) => ({
       id: u._id,
@@ -166,8 +230,27 @@ async function exportRaw() {
       rewardsGiven: u.rewardsGiven || 0,
     })),
     checkins: checkins.map((c) => ({ id: c._id, userId: c.userId, date: c.date })),
+    messages: messages.map((m) => ({
+      id: m._id,
+      memberId: m.memberId,
+      senderRole: m.senderRole,
+      senderName: m.senderName,
+      body: m.body,
+      createdAt: m.createdAt,
+    })),
+    posts: posts.map((p) => ({
+      id: p._id,
+      authorId: p.authorId,
+      authorName: p.authorName,
+      body: p.body,
+      createdAt: p.createdAt,
+      replies: p.replies || [],
+    })),
     nextUserId: (usersCounter ? usersCounter.seq : 0) + 1,
     nextCheckinId: (checkinsCounter ? checkinsCounter.seq : 0) + 1,
+    nextMessageId: (messagesCounter ? messagesCounter.seq : 0) + 1,
+    nextPostId: (postsCounter ? postsCounter.seq : 0) + 1,
+    nextReplyId: (repliesCounter ? repliesCounter.seq : 0) + 1,
   };
   return JSON.stringify(data, null, 2);
 }
@@ -177,9 +260,13 @@ async function importRaw(jsonStr) {
   if (!Array.isArray(parsed.users) || !Array.isArray(parsed.checkins)) {
     throw new Error('バックアップファイルの形式が正しくありません');
   }
+  const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
+  const posts = Array.isArray(parsed.posts) ? parsed.posts : [];
   const db = await getDb();
   await db.collection('users').deleteMany({});
   await db.collection('checkins').deleteMany({});
+  await db.collection('messages').deleteMany({});
+  await db.collection('posts').deleteMany({});
   if (parsed.users.length) {
     await db.collection('users').insertMany(
       parsed.users.map((u) => ({
@@ -195,10 +282,40 @@ async function importRaw(jsonStr) {
   if (parsed.checkins.length) {
     await db.collection('checkins').insertMany(parsed.checkins.map((c) => ({ _id: c.id, userId: c.userId, date: c.date })));
   }
+  if (messages.length) {
+    await db.collection('messages').insertMany(
+      messages.map((m) => ({
+        _id: m.id,
+        memberId: m.memberId,
+        senderRole: m.senderRole,
+        senderName: m.senderName,
+        body: m.body,
+        createdAt: m.createdAt,
+      }))
+    );
+  }
+  if (posts.length) {
+    await db.collection('posts').insertMany(
+      posts.map((p) => ({
+        _id: p.id,
+        authorId: p.authorId,
+        authorName: p.authorName,
+        body: p.body,
+        createdAt: p.createdAt,
+        replies: p.replies || [],
+      }))
+    );
+  }
   const maxUserId = parsed.users.reduce((m, u) => Math.max(m, u.id), 0);
   const maxCheckinId = parsed.checkins.reduce((m, c) => Math.max(m, c.id), 0);
+  const maxMessageId = messages.reduce((m, x) => Math.max(m, x.id), 0);
+  const maxPostId = posts.reduce((m, x) => Math.max(m, x.id), 0);
+  const maxReplyId = posts.flatMap((p) => (p.replies || []).map((r) => r.id)).reduce((m, id) => Math.max(m, id), 0);
   await db.collection('counters').updateOne({ _id: 'users' }, { $set: { seq: maxUserId } }, { upsert: true });
   await db.collection('counters').updateOne({ _id: 'checkins' }, { $set: { seq: maxCheckinId } }, { upsert: true });
+  await db.collection('counters').updateOne({ _id: 'messages' }, { $set: { seq: maxMessageId } }, { upsert: true });
+  await db.collection('counters').updateOne({ _id: 'posts' }, { $set: { seq: maxPostId } }, { upsert: true });
+  await db.collection('counters').updateOne({ _id: 'replies' }, { $set: { seq: maxReplyId } }, { upsert: true });
 }
 
 module.exports = {
@@ -216,6 +333,11 @@ module.exports = {
   removeCheckin,
   getAllCheckins,
   incrementRewardsGiven,
+  getMessagesForMember,
+  addMessage,
+  getBoardPosts,
+  addBoardPost,
+  addBoardReply,
   exportRaw,
   importRaw,
 };
