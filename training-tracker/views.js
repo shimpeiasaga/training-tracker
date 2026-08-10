@@ -1,5 +1,5 @@
 // HTMLをテンプレートエンジンなしで生成する(外部依存なし)
-const { MONTHLY_GOAL, REWARD_MONTHS } = require('./stats');
+const { MONTHLY_GOAL, REWARD_MONTHS, MAX_MEMBER_VIDEOS } = require('./stats');
 const CHART_JS = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js';
 
 function escapeHtml(str) {
@@ -9,6 +9,48 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+// YouTubeのURL(watch/短縮/shorts/埋め込み)から埋め込み用URLを作る。YouTube以外はnull
+function youtubeEmbedUrl(url) {
+  if (!url) return null;
+  const m = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([\w-]{11})/);
+  return m ? `https://www.youtube.com/embed/${m[1]}` : null;
+}
+
+// 動画1本ぶんのプレーヤー(YouTubeなら埋め込み、それ以外はリンク表示)
+function videoPlayerHtml(video) {
+  const embedUrl = youtubeEmbedUrl(video.url);
+  if (embedUrl) {
+    return `<div class="video-embed"><iframe src="${escapeHtml(embedUrl)}" title="${escapeHtml(video.title)}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>`;
+  }
+  return `<p style="font-size:0.9rem;"><a href="${escapeHtml(video.url)}" target="_blank" rel="noopener">動画を開く &rarr;</a></p>`;
+}
+
+// 会員ごとの動画一覧(最大MAX_MEMBER_VIDEOS本、deletable=trueで削除ボタン付き)
+function videoListHtml(videos, { deletable = false, memberId } = {}) {
+  if (!videos || !videos.length) {
+    return '<p style="font-size:0.85rem;color:var(--muted);margin:0;">まだ動画は登録されていません</p>';
+  }
+  const items = videos
+    .map(
+      (v) => `
+      <div class="video-item">
+        <div class="video-item-head">
+          <h4>${escapeHtml(v.title)}</h4>
+          ${
+            deletable
+              ? `<form method="POST" action="/admin/members/${memberId}/videos/${v.id}/delete" onsubmit="return confirm('この動画を削除しますか?');">
+                  <button class="btn danger" type="submit">削除</button>
+                </form>`
+              : ''
+          }
+        </div>
+        ${videoPlayerHtml(v)}
+      </div>`
+    )
+    .join('');
+  return `<div class="video-list">${items}</div>`;
 }
 
 function layout({ title, body, script = '', topbar = '' }) {
@@ -66,18 +108,22 @@ function loginPage(error) {
   }).replace('<body>', '<body style="display:flex;min-height:100vh;">').replace('<div class="container">', '<div class="container" style="width:100%;display:flex;align-items:center;justify-content:center;">');
 }
 
-function gridHtml(grid) {
-  return `<div class="grid">${grid
-    .map((d) => {
-      const dayNum = Number(d.date.slice(8, 10));
-      const dow = new Date(d.date + 'T00:00:00Z').getUTCDay(); // 0=日, 6=土
-      const weekendCls = dow === 0 ? 'sun' : dow === 6 ? 'sat' : '';
-      return `<div class="day ${d.checked ? 'checked' : ''} ${weekendCls}" title="${d.date}"><span class="daynum">${dayNum}</span></div>`;
-    })
-    .join('')}</div>`;
-}
-
 const WEEKDAY_JA = ['日', '月', '火', '水', '木', '金', '土'];
+
+// 月間カレンダー表示(曜日ヘッダー付き)。gridはstats.monthCalendar()の出力(nullは空白セル)
+function gridHtml(grid) {
+  const head = WEEKDAY_JA.map(
+    (w, i) => `<div class="day-head ${i === 0 ? 'sun' : ''} ${i === 6 ? 'sat' : ''}">${w}</div>`
+  ).join('');
+  const cells = grid
+    .map((c) => {
+      if (!c) return '<div class="day empty"></div>';
+      const weekendCls = c.dow === 0 ? 'sun' : c.dow === 6 ? 'sat' : '';
+      return `<div class="day ${c.checked ? 'checked' : ''} ${weekendCls}" title="${c.date}"><span class="daynum">${c.day}</span></div>`;
+    })
+    .join('');
+  return `<div class="grid-head">${head}</div><div class="grid">${cells}</div>`;
+}
 
 // "2026-08-02" -> "8月2日(日)"
 function formatDateJa(dateStr) {
@@ -86,6 +132,21 @@ function formatDateJa(dateStr) {
   const day = d.getUTCDate();
   const weekday = WEEKDAY_JA[d.getUTCDay()];
   return `${month}月${day}日(${weekday})`;
+}
+
+// "2026-08" -> "2026年8月"
+function formatMonthJa(mKey) {
+  const [y, m] = mKey.split('-').map(Number);
+  return `${y}年${m}月`;
+}
+
+// カレンダーの前月/翌月ナビゲーション(翌月が無い=今月なら翌月ボタンは無効表示)
+function calendarNavHtml(basePath, prevMonthKey, nextMonthKey) {
+  const prev = `<a class="btn" href="${basePath}?month=${prevMonthKey}">&laquo; 前月</a>`;
+  const next = nextMonthKey
+    ? `<a class="btn" href="${basePath}?month=${nextMonthKey}">翌月 &raquo;</a>`
+    : `<button class="btn" type="button" disabled>翌月 &raquo;</button>`;
+  return `<div class="calendar-nav">${prev}${next}</div>`;
 }
 
 // 実施した日を新しい順に一覧表示する(「何月何日にできたか」がひと目で分かるように)
@@ -224,6 +285,10 @@ function memberPage({
   totalDays,
   weekCount,
   grid,
+  monthKeyForGrid,
+  prevMonthKey,
+  nextMonthKey,
+  calendarBasePath,
   weekly,
   monthCount,
   monthGoal,
@@ -239,6 +304,7 @@ function memberPage({
   checkinDates,
   badgeLog,
   messages,
+  videos,
 }) {
   const script = `
     const weekly = ${JSON.stringify(weekly)};
@@ -271,6 +337,11 @@ function memberPage({
     body: `
     ${celebrateBanner}
 
+    <div class="card" id="video">
+      <h3>🎥 あなた専用のトレーニング動画(${(videos || []).length}/${MAX_MEMBER_VIDEOS})</h3>
+      ${videoListHtml(videos)}
+    </div>
+
     <div class="card">
       <h3>バッジコレクション</h3>
       ${badgeRowHtml(badges)}
@@ -298,7 +369,8 @@ function memberPage({
         <div class="stat-box"><div class="num">${streak}</div><div class="label">連続日数</div></div>
         <div class="stat-box"><div class="num">${weekCount}/7</div><div class="label">今週の実施回数</div></div>
       </div>
-      <h3>直近4週間</h3>
+      <h3>${formatMonthJa(monthKeyForGrid)}のカレンダー</h3>
+      ${calendarNavHtml(calendarBasePath, prevMonthKey, nextMonthKey)}
       ${gridHtml(grid)}
     </div>
 
@@ -447,7 +519,7 @@ function adminPage({ members, teamWeekly, ranked, error, message }) {
   });
 }
 
-function adminMemberPage({ member, streak, weekCount, total, grid, weekly, monthCount, monthlyStreak, monthlySeries, rewardsEarned, rewardsGiven, rewardsPending, badges, checkinDates, badgeLog, messages }) {
+function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGrid, prevMonthKey, nextMonthKey, calendarBasePath, weekly, monthCount, monthlyStreak, monthlySeries, rewardsEarned, rewardsGiven, rewardsPending, badges, checkinDates, badgeLog, messages, videos, videoError }) {
   const script = `
     const weekly = ${JSON.stringify(weekly)};
     new Chart(document.getElementById('memberChart'), {
@@ -484,8 +556,30 @@ function adminMemberPage({ member, streak, weekCount, total, grid, weekly, month
         <div class="stat-box"><div class="num">${weekCount}/7</div><div class="label">今週</div></div>
         <div class="stat-box"><div class="num">${total}</div><div class="label">累計実施回数</div></div>
       </div>
-      <h3>直近4週間</h3>
+      <h3>${formatMonthJa(monthKeyForGrid)}のカレンダー</h3>
+      ${calendarNavHtml(calendarBasePath, prevMonthKey, nextMonthKey)}
       ${gridHtml(grid)}
+    </div>
+
+    <div class="card" id="video">
+      <h3>🎥 この会員専用の動画(${(videos || []).length}/${MAX_MEMBER_VIDEOS})</h3>
+      ${videoError ? `<div class="error">${escapeHtml(videoError)}</div>` : ''}
+      ${videoListHtml(videos, { deletable: true, memberId: member.id })}
+      ${
+        (videos || []).length < MAX_MEMBER_VIDEOS
+          ? `<form method="POST" action="/admin/members/${member.id}/videos" class="inline-form" style="margin-top:12px;">
+              <div class="form-row">
+                <label>タイトル</label>
+                <input type="text" name="title" maxlength="60" required placeholder="例: スクワットフォーム講座">
+              </div>
+              <div class="form-row">
+                <label>動画URL(YouTubeのURLを推奨)</label>
+                <input type="text" name="url" required placeholder="https://www.youtube.com/watch?v=...">
+              </div>
+              <button class="btn primary" type="submit">追加</button>
+            </form>`
+          : `<p style="font-size:0.85rem;color:var(--muted);margin-top:12px;">上限の${MAX_MEMBER_VIDEOS}本に達しています。追加するには先に削除してください。</p>`
+      }
     </div>
 
     <div class="card">
@@ -551,13 +645,22 @@ function adminMemberPage({ member, streak, weekCount, total, grid, weekly, month
 }
 
 // 会員なら誰でも投稿できる、返信はスタッフ(管理者)のみの掲示板
-function boardPage({ posts, userRole, userName, error }) {
+function boardPage({ posts, userRole, userName, userId, error }) {
   const postsHtml = posts.length
     ? posts
         .map(
           (p) => `
       <div class="card board-post">
-        <div class="board-post-meta"><strong>${escapeHtml(p.authorName)}</strong> <span>${escapeHtml(p.createdAt)}</span></div>
+        <div class="board-post-meta">
+          <span><strong>${escapeHtml(p.authorName)}</strong> <span>${escapeHtml(p.createdAt)}</span></span>
+          ${
+            p.authorId === userId
+              ? `<form method="POST" action="/board/${p.id}/delete" onsubmit="return confirm('この投稿を削除しますか？');">
+                  <button class="btn danger" type="submit" style="padding:2px 8px;font-size:0.75rem;">削除</button>
+                </form>`
+              : ''
+          }
+        </div>
         <div class="board-post-body">${escapeHtml(p.body)}</div>
         ${(p.replies || [])
           .map(
