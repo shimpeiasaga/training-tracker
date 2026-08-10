@@ -18,6 +18,7 @@ function ensureDataFile() {
           checkins: [],
           messages: [],
           posts: [],
+          sessions: [],
           nextUserId: 1,
           nextCheckinId: 1,
           nextMessageId: 1,
@@ -38,6 +39,7 @@ function load() {
   // 古いバックアップ/データファイルにも新しい項目が無くても動くようにする
   if (!Array.isArray(data.messages)) data.messages = [];
   if (!Array.isArray(data.posts)) data.posts = [];
+  if (!Array.isArray(data.sessions)) data.sessions = [];
   if (typeof data.nextMessageId !== 'number') data.nextMessageId = 1;
   if (typeof data.nextPostId !== 'number') data.nextPostId = 1;
   if (typeof data.nextReplyId !== 'number') data.nextReplyId = 1;
@@ -47,6 +49,32 @@ function load() {
 
 function save(data) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+}
+
+// --- ログインセッション(サーバー再起動をまたいでもログイン状態を保つためファイルに保存する) ---
+const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30日
+
+function createSession(id, user) {
+  const data = load();
+  const now = Date.now();
+  // ついでに期限切れの古いセッションを掃除しておく
+  data.sessions = (data.sessions || []).filter((s) => s.expires >= now);
+  data.sessions.push({ id, user, expires: now + SESSION_TTL_MS });
+  save(data);
+}
+
+function getSession(id) {
+  if (!id) return null;
+  const s = (load().sessions || []).find((x) => x.id === id);
+  if (!s) return null;
+  if (s.expires < Date.now()) return null;
+  return { user: s.user, expires: s.expires };
+}
+
+function destroySession(id) {
+  const data = load();
+  data.sessions = (data.sessions || []).filter((s) => s.id !== id);
+  save(data);
 }
 
 // --- users ---
@@ -255,6 +283,9 @@ function importRaw(jsonStr) {
 
 module.exports = {
   backend: 'file',
+  createSession,
+  getSession,
+  destroySession,
   getUserByUsername,
   getUserById,
   getAllMembers,
