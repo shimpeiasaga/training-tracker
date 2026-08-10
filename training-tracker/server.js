@@ -43,9 +43,10 @@ function redirect(res, location, extraHeaders = {}) {
   res.end();
 }
 
-function getCurrentSession(req) {
+async function getCurrentSession(req) {
   const cookies = sess.parseCookies(req);
-  return { sid: cookies.sid, session: sess.getSession(cookies.sid) };
+  const session = await db.getSession(cookies.sid);
+  return { sid: cookies.sid, session };
 }
 
 // カレンダーで表示する月を決める(?month=YYYY-MM、未来の月は指定されても今月に丸める)
@@ -97,7 +98,7 @@ const server = http.createServer(async (req, res) => {
     return serveStatic(req, res, pathname);
   }
 
-  const { sid, session } = getCurrentSession(req);
+  const { sid, session } = await getCurrentSession(req);
   const user = session ? session.user : null;
 
   // --- ログイン画面 ---
@@ -112,12 +113,13 @@ const server = http.createServer(async (req, res) => {
     if (!u || !crypto.verifyPassword(body.password || '', u.passwordHash)) {
       return sendHtml(res, 200, views.loginPage('ユーザー名またはパスワードが違います'));
     }
-    const newSid = sess.createSession({ id: u.id, name: u.name, username: u.username, role: u.role });
+    const newSid = sess.generateSessionId();
+    await db.createSession(newSid, { id: u.id, name: u.name, username: u.username, role: u.role });
     return redirect(res, '/', { 'Set-Cookie': sess.cookieHeader(newSid, 60 * 60 * 24 * 30) });
   }
 
   if (method === 'POST' && pathname === '/logout') {
-    if (sid) sess.destroySession(sid);
+    if (sid) await db.destroySession(sid);
     return redirect(res, '/login', { 'Set-Cookie': sess.clearCookieHeader() });
   }
 
@@ -501,6 +503,9 @@ const server = http.createServer(async (req, res) => {
 
 (async () => {
   try {
+    if (typeof db.ensureIndexes === 'function') {
+      await db.ensureIndexes();
+    }
     await ensureDefaultAdmin();
     server.listen(PORT, () => {
       console.log(`training-tracker running at http://localhost:${PORT} (backend: ${db.backend})`);
