@@ -64,8 +64,9 @@ function monthCalendar(checkinDates, mKey) {
   const [y, m] = mKey.split('-').map(Number);
   const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
   const startDow = new Date(Date.UTC(y, m - 1, 1)).getUTCDay(); // 0=日,...,6=土
+  const leadingBlanks = (startDow + 6) % 7; // 月曜始まりにするための調整(0=月,...,6=日)
   const cells = [];
-  for (let i = 0; i < startDow; i++) cells.push(null);
+  for (let i = 0; i < leadingBlanks; i++) cells.push(null);
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
     cells.push({
