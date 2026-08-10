@@ -56,6 +56,29 @@ function dailyGrid(checkinDates, daysBack = 56) {
   return days;
 }
 
+// 指定した月(YYYY-MM)のカレンダー用データを作る
+// その月の1日が何曜日から始まるかに合わせて先頭にnull(空白セル)を入れ、
+// 月末以降も7の倍数になるようnullで埋める(週の行として表示するため)
+function monthCalendar(checkinDates, mKey) {
+  const dateSet = new Set(checkinDates);
+  const [y, m] = mKey.split('-').map(Number);
+  const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const startDow = new Date(Date.UTC(y, m - 1, 1)).getUTCDay(); // 0=日,...,6=土
+  const cells = [];
+  for (let i = 0; i < startDow; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    cells.push({
+      date: dateStr,
+      day: d,
+      checked: dateSet.has(dateStr),
+      dow: new Date(dateStr + 'T00:00:00Z').getUTCDay(),
+    });
+  }
+  while (cells.length % 7 !== 0) cells.push(null);
+  return cells;
+}
+
 // 連続達成日数(今日 or 昨日から遡って連続している日数)
 function currentStreak(checkinDates) {
   const dateSet = new Set(checkinDates);
@@ -91,6 +114,9 @@ function thisWeekCount(checkinDates) {
 // --- 月間目標(月10回×3ヶ月継続で特典)まわり ---
 const MONTHLY_GOAL = 10; // 月にこの回数以上で「達成」
 const REWARD_MONTHS = 3; // この月数連続達成で特典1回分
+
+// 会員1人あたりに登録できる動画の最大本数
+const MAX_MEMBER_VIDEOS = 10;
 
 function monthKey(dateStr) {
   return dateStr.slice(0, 7); // "YYYY-MM"
@@ -199,10 +225,12 @@ module.exports = {
   weekStart,
   weeklySeries,
   dailyGrid,
+  monthCalendar,
   currentStreak,
   thisWeekCount,
   MONTHLY_GOAL,
   REWARD_MONTHS,
+  MAX_MEMBER_VIDEOS,
   monthKey,
   addMonths,
   countForMonth,
