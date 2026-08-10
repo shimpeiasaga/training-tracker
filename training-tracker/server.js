@@ -191,6 +191,17 @@ const server = http.createServer(async (req, res) => {
     return redirect(res, '/member#messages');
   }
 
+  let memberMsgDeleteMatch = pathname.match(/^\/member\/messages\/(\d+)\/delete$/);
+  if (memberMsgDeleteMatch && method === 'POST') {
+    try {
+      await db.deleteMessage(memberMsgDeleteMatch[1], 'member', user.id);
+    } catch (err) {
+      res.writeHead(403);
+      return res.end('権限がありません');
+    }
+    return redirect(res, '/member#messages');
+  }
+
   // --- 会員向け掲示板(誰でも投稿できる、返信できるのは管理者のみ) ---
   if (pathname === '/board' && method === 'GET') {
     return sendHtml(
@@ -379,6 +390,17 @@ const server = http.createServer(async (req, res) => {
           body: text,
           createdAt: stats.nowStr(),
         });
+      }
+      return redirect(res, `/admin/member/${match[1]}#messages`);
+    }
+
+    match = pathname.match(/^\/admin\/members\/(\d+)\/messages\/(\d+)\/delete$/);
+    if (match && method === 'POST') {
+      try {
+        await db.deleteMessage(match[2], 'admin', user.id);
+      } catch (err) {
+        res.writeHead(403);
+        return res.end('権限がありません');
       }
       return redirect(res, `/admin/member/${match[1]}#messages`);
     }
