@@ -195,6 +195,20 @@ async function addMessage({ memberId, senderRole, senderName, body, createdAt })
   return mapMessage(doc);
 }
 
+// 送った本人だけが自分のメッセージを削除できる
+async function deleteMessage(messageId, requesterRole, requesterId) {
+  const db = await getDb();
+  const msg = await db.collection('messages').findOne({ _id: Number(messageId) });
+  if (!msg) throw new Error('メッセージが見つかりません');
+  if (msg.senderRole !== requesterRole) {
+    throw new Error('このメッセージを削除する権限がありません');
+  }
+  if (requesterRole === 'member' && msg.memberId !== Number(requesterId)) {
+    throw new Error('このメッセージを削除する権限がありません');
+  }
+  await db.collection('messages').deleteOne({ _id: Number(messageId) });
+}
+
 // --- 会員向け掲示板(会員が投稿、返信できるのは管理者のみ) ---
 function mapPost(doc) {
   if (!doc) return undefined;
@@ -376,6 +390,7 @@ module.exports = {
   removeMemberVideo,
   getMessagesForMember,
   addMessage,
+  deleteMessage,
   getBoardPosts,
   addBoardPost,
   addBoardReply,
