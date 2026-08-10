@@ -37,6 +37,31 @@ async function ensureIndexes() {
   const db = await getDb();
   await db.collection('users').createIndex({ username: 1 }, { unique: true });
   await db.collection('checkins').createIndex({ userId: 1, date: 1 });
+  // expiresを過ぎたセッションをMongo側が自動で削除してくれる(TTLインデックス)
+  await db.collection('sessions').createIndex({ expires: 1 }, { expireAfterSeconds: 0 });
+}
+
+// --- ログインセッション(Renderがスリープ・再起動してもログイン状態を保つためDBに保存する) ---
+const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30日
+
+async function createSession(id, user) {
+  const db = await getDb();
+  const expires = new Date(Date.now() + SESSION_TTL_MS);
+  await db.collection('sessions').insertOne({ _id: id, user, expires });
+}
+
+async function getSession(id) {
+  if (!id) return null;
+  const db = await getDb();
+  const s = await db.collection('sessions').findOne({ _id: id });
+  if (!s) return null;
+  if (s.expires.getTime() < Date.now()) return null;
+  return { user: s.user, expires: s.expires.getTime() };
+}
+
+async function destroySession(id) {
+  const db = await getDb();
+  await db.collection('sessions').deleteOne({ _id: id });
 }
 
 // counters コレクションでオートインクリメントの整数IDを発行する
@@ -374,6 +399,9 @@ async function importRaw(jsonStr) {
 module.exports = {
   backend: 'mongo',
   ensureIndexes,
+  createSession,
+  getSession,
+  destroySession,
   getUserByUsername,
   getUserById,
   getAllMembers,
