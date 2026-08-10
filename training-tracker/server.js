@@ -48,6 +48,16 @@ function getCurrentSession(req) {
   return { sid: cookies.sid, session: sess.getSession(cookies.sid) };
 }
 
+// カレンダーで表示する月を決める(?month=YYYY-MM、未来の月は指定されても今月に丸める)
+function resolveViewMonth(url) {
+  const current = stats.monthKey(stats.todayStr());
+  const requested = url.searchParams.get('month');
+  if (requested && /^\d{4}-\d{2}$/.test(requested) && requested <= current) {
+    return requested;
+  }
+  return current;
+}
+
 // 今月のチェック回数で会員をランキングする(同点は同順位)
 async function computeMonthlyRanking() {
   const members = await db.getAllMembers();
@@ -122,12 +132,15 @@ const server = http.createServer(async (req, res) => {
 
   // --- 会員ページ ---
   if (pathname === '/member' && method === 'GET') {
+    const fullUser = await db.getUserById(user.id);
     const checkins = (await db.getCheckinsForUser(user.id)).map((c) => c.date);
     const today = stats.todayStr();
     const streak = stats.currentStreak(checkins);
     const totalDays = checkins.length; // バッジは連続日数ではなく累計実施日数で判定する
     const celebrate = url.searchParams.get('celebrate') === '1';
     const rewardCelebrate = celebrate && url.searchParams.get('reward') === '1';
+    const viewMonth = resolveViewMonth(url);
+    const currentMonth = stats.monthKey(today);
     return sendHtml(
       res,
       200,
@@ -138,7 +151,11 @@ const server = http.createServer(async (req, res) => {
         streak,
         totalDays,
         weekCount: stats.thisWeekCount(checkins),
-        grid: stats.dailyGrid(checkins, 28),
+        grid: stats.monthCalendar(checkins, viewMonth),
+        monthKeyForGrid: viewMonth,
+        prevMonthKey: stats.addMonths(viewMonth, -1),
+        nextMonthKey: viewMonth < currentMonth ? stats.addMonths(viewMonth, 1) : null,
+        calendarBasePath: '/member',
         weekly: stats.weeklySeries(checkins, 8),
         monthCount: stats.currentMonthCount(checkins),
         monthGoal: stats.MONTHLY_GOAL,
@@ -154,6 +171,7 @@ const server = http.createServer(async (req, res) => {
         checkinDates: checkins,
         badgeLog: stats.badgeUnlockLog(checkins),
         messages: await db.getMessagesForMember(user.id),
+        videos: fullUser.videos || [],
       })
     );
   }
@@ -182,6 +200,7 @@ const server = http.createServer(async (req, res) => {
         posts: await db.getBoardPosts(),
         userRole: user.role,
         userName: user.name,
+        userId: user.id,
         error: url.searchParams.get('error'),
       })
     );
@@ -206,6 +225,17 @@ const server = http.createServer(async (req, res) => {
     const text = (body.body || '').trim();
     if (text) {
       await db.addBoardReply({ postId: boardMatch[1], adminName: user.name, body: text, createdAt: stats.nowStr() });
+    }
+    return redirect(res, '/board');
+  }
+
+  let boardDeleteMatch = pathname.match(/^\/board\/(\d+)\/delete$/);
+  if (boardDeleteMatch && method === 'POST') {
+    try {
+      await db.deleteBoardPost(boardDeleteMatch[1], user.id);
+    } catch (err) {
+      res.writeHead(403);
+      return res.end('権限がありません');
     }
     return redirect(res, '/board');
   }
@@ -353,6 +383,27 @@ const server = http.createServer(async (req, res) => {
       return redirect(res, `/admin/member/${match[1]}#messages`);
     }
 
+    match = pathname.match(/^\/admin\/members\/(\d+)\/videos$/);
+    if (match && method === 'POST') {
+      const body = await parseBody(req);
+      const title = (body.title || '').trim();
+      const videoUrl = (body.url || '').trim();
+      if (title && videoUrl) {
+        try {
+          await db.addMemberVideo(match[1], { title, url: videoUrl, createdAt: stats.nowStr() });
+        } catch (err) {
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message)}#video`);
+        }
+      }
+      return redirect(res, `/admin/member/${match[1]}#video`);
+    }
+
+    match = pathname.match(/^\/admin\/members\/(\d+)\/videos\/(\d+)\/delete$/);
+    if (match && method === 'POST') {
+      await db.removeMemberVideo(match[1], match[2]);
+      return redirect(res, `/admin/member/${match[1]}#video`);
+    }
+
     if (pathname === '/admin/backup' && method === 'GET') {
       const raw = await db.exportRaw();
       const filename = `training-tracker-backup-${stats.todayStr()}.json`;
@@ -389,6 +440,8 @@ const server = http.createServer(async (req, res) => {
       const monthlyStreak = stats.currentMonthlyStreak(checkins);
       const earned = stats.rewardsEarned(monthlyStreak);
       const given = member.rewardsGiven || 0;
+      const viewMonth = resolveViewMonth(url);
+      const currentMonth = stats.monthKey(stats.todayStr());
       return sendHtml(
         res,
         200,
@@ -397,7 +450,11 @@ const server = http.createServer(async (req, res) => {
           streak: memberStreak,
           weekCount: stats.thisWeekCount(checkins),
           total: checkins.length,
-          grid: stats.dailyGrid(checkins, 28),
+          grid: stats.monthCalendar(checkins, viewMonth),
+          monthKeyForGrid: viewMonth,
+          prevMonthKey: stats.addMonths(viewMonth, -1),
+          nextMonthKey: viewMonth < currentMonth ? stats.addMonths(viewMonth, 1) : null,
+          calendarBasePath: `/admin/member/${member.id}`,
           weekly: stats.weeklySeries(checkins, 12),
           monthCount: stats.currentMonthCount(checkins),
           monthlyStreak,
@@ -409,6 +466,8 @@ const server = http.createServer(async (req, res) => {
           checkinDates: checkins,
           badgeLog: stats.badgeUnlockLog(checkins),
           messages: await db.getMessagesForMember(member.id),
+          videos: member.videos || [],
+          videoError: url.searchParams.get('error'),
         })
       );
     }
