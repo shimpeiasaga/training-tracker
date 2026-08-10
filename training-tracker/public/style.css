@@ -38,6 +38,12 @@ body {
   border-radius: 6px;
   cursor: pointer;
 }
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.topbar-actions a { font-size: 0.85rem; opacity: 0.95; }
 
 .container {
   max-width: 900px;
@@ -121,6 +127,12 @@ h1, h2, h3 { margin-top: 0; }
   color: var(--muted);
 }
 .grid .day.checked .daynum { color: #fff; font-weight: 700; }
+.grid .day.sat:not(.checked) { background: #dbeafe; }
+.grid .day.sun:not(.checked) { background: #fde2e1; }
+.grid .day.sat .daynum { color: #1d4ed8; }
+.grid .day.sun .daynum { color: #dc2626; }
+.grid .day.checked.sat .daynum,
+.grid .day.checked.sun .daynum { color: #fff; }
 
 .history-list {
   list-style: none;
@@ -277,6 +289,64 @@ tr:hover { background: #fafcfa; }
   }
 }
 
+/* --- 邂｡逅��∑莨壼藤縺ｮ繝｡繝�そ繝ｼ繧ｸ --- */
+.msg-thread {
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.msg-bubble {
+  max-width: 80%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: #eef2ef;
+}
+.msg-bubble.from-admin {
+  align-self: flex-start;
+  background: #eef2ef;
+  border-bottom-left-radius: 2px;
+}
+.msg-bubble.from-member {
+  align-self: flex-end;
+  background: #d8f0e0;
+  border-bottom-right-radius: 2px;
+}
+.msg-meta { font-size: 0.7rem; color: var(--muted); margin-bottom: 2px; }
+.msg-body { font-size: 0.9rem; white-space: pre-wrap; word-break: break-word; }
+
+/* --- 謗ｲ遉ｺ譚ｿ --- */
+.board-post-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.board-post-body { font-size: 0.95rem; white-space: pre-wrap; word-break: break-word; }
+.board-reply {
+  margin-top: 10px;
+  margin-left: 16px;
+  padding: 8px 12px;
+  background: #eef5f0;
+  border-radius: 8px;
+  border-left: 3px solid var(--primary-light);
+}
+.board-reply-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-bottom: 3px;
+}
+.board-reply-body { font-size: 0.88rem; white-space: pre-wrap; word-break: break-word; }
+.board-reply-form { margin-top: 10px; }
+.board-reply-form .form-row { flex: 1; margin-bottom: 0; }
+
 /* --- 繧ｹ繝槭�蜷代￠縺ｮ菴咏區隱ｿ謨ｴ(莨壼藤縺ｯ蝓ｺ譛ｬ繧ｹ繝槭�謫堺ｽ懊ｒ諠ｳ螳�) --- */
 @media (max-width: 480px) {
   .container { padding: 14px; }
@@ -288,4 +358,8 @@ tr:hover { background: #fafcfa; }
   .badge-item .icon { font-size: 1.5rem; }
   .checkin-btn { padding: 16px; font-size: 1rem; }
   th, td { padding: 8px 6px; font-size: 0.85rem; }
+  .topbar { flex-wrap: wrap; gap: 8px; }
+  .topbar-actions { gap: 10px; }
+  .msg-bubble { max-width: 92%; }
+  .board-reply { margin-left: 8px; }
 }
