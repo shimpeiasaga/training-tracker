@@ -2,6 +2,7 @@
 // 自分のPCで動かす場合はこちらが使われる(MONGODB_URIが無い時のデフォルト)
 const fs = require('fs');
 const path = require('path');
+const { MAX_MEMBER_VIDEOS } = require('./stats');
 
 const DATA_DIR = path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'data.json');
@@ -12,7 +13,18 @@ function ensureDataFile() {
     fs.writeFileSync(
       DATA_FILE,
       JSON.stringify(
-        { users: [], checkins: [], messages: [], posts: [], nextUserId: 1, nextCheckinId: 1, nextMessageId: 1, nextPostId: 1, nextReplyId: 1 },
+        {
+          users: [],
+          checkins: [],
+          messages: [],
+          posts: [],
+          nextUserId: 1,
+          nextCheckinId: 1,
+          nextMessageId: 1,
+          nextPostId: 1,
+          nextReplyId: 1,
+          nextVideoId: 1,
+        },
         null,
         2
       )
@@ -29,6 +41,7 @@ function load() {
   if (typeof data.nextMessageId !== 'number') data.nextMessageId = 1;
   if (typeof data.nextPostId !== 'number') data.nextPostId = 1;
   if (typeof data.nextReplyId !== 'number') data.nextReplyId = 1;
+  if (typeof data.nextVideoId !== 'number') data.nextVideoId = 1;
   return data;
 }
 
@@ -76,6 +89,30 @@ function updateUserPassword(id, passwordHash) {
     save(data);
   }
   return user;
+}
+
+// 会員ごとの動画(タイトル+URL、最大MAX_MEMBER_VIDEOS本)
+function addMemberVideo(id, { title, url, createdAt }) {
+  const data = load();
+  const user = data.users.find((u) => u.id === Number(id));
+  if (!user) throw new Error('会員が見つかりません');
+  if (!Array.isArray(user.videos)) user.videos = [];
+  if (user.videos.length >= MAX_MEMBER_VIDEOS) {
+    throw new Error(`動画は最大${MAX_MEMBER_VIDEOS}本までです`);
+  }
+  const video = { id: data.nextVideoId++, title, url, createdAt };
+  user.videos.push(video);
+  save(data);
+  return video;
+}
+
+function removeMemberVideo(id, videoId) {
+  const data = load();
+  const user = data.users.find((u) => u.id === Number(id));
+  if (user && Array.isArray(user.videos)) {
+    user.videos = user.videos.filter((v) => v.id !== Number(videoId));
+    save(data);
+  }
 }
 
 function deleteUser(id) {
@@ -154,6 +191,18 @@ function addBoardReply({ postId, adminName, body, createdAt }) {
   return reply;
 }
 
+// 投稿者本人だけが自分の投稿を削除できる
+function deleteBoardPost(postId, authorId) {
+  const data = load();
+  const post = data.posts.find((p) => p.id === Number(postId));
+  if (!post) throw new Error('投稿が見つかりません');
+  if (post.authorId !== Number(authorId)) {
+    throw new Error('この投稿を削除する権限がありません');
+  }
+  data.posts = data.posts.filter((p) => p.id !== Number(postId));
+  save(data);
+}
+
 // --- バックアップ / 復元 ---
 function exportRaw() {
   return JSON.stringify(load(), null, 2);
@@ -182,6 +231,10 @@ function importRaw(jsonStr) {
     const allReplyIds = parsed.posts.flatMap((p) => (p.replies || []).map((r) => r.id));
     parsed.nextReplyId = allReplyIds.length ? Math.max(...allReplyIds) + 1 : 1;
   }
+  if (typeof parsed.nextVideoId !== 'number') {
+    const allVideoIds = parsed.users.flatMap((u) => (u.videos || []).map((v) => v.id));
+    parsed.nextVideoId = allVideoIds.length ? Math.max(...allVideoIds) + 1 : 1;
+  }
   save(parsed);
 }
 
@@ -199,11 +252,14 @@ module.exports = {
   removeCheckin,
   getAllCheckins,
   incrementRewardsGiven,
+  addMemberVideo,
+  removeMemberVideo,
   getMessagesForMember,
   addMessage,
   getBoardPosts,
   addBoardPost,
   addBoardReply,
+  deleteBoardPost,
   exportRaw,
   importRaw,
 };
