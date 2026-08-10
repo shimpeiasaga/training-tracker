@@ -1,6 +1,7 @@
 // MongoDB Atlas を使ったデータ保存(Renderの再デプロイ・スリープでデータが消えないようにするため)
 // 環境変数 MONGODB_URI が設定されている時だけ使われる(db.js が自動で切り替える)
 const { MongoClient } = require('mongodb');
+const { MAX_MEMBER_VIDEOS } = require('./stats');
 
 const uri = process.env.MONGODB_URI;
 let clientPromise = null;
@@ -60,6 +61,7 @@ function mapUser(doc) {
     passwordHash: doc.passwordHash,
     role: doc.role,
     rewardsGiven: doc.rewardsGiven || 0,
+    videos: doc.videos || [],
   };
 }
 
@@ -105,6 +107,26 @@ async function updateUserPassword(id, passwordHash) {
   const db = await getDb();
   await db.collection('users').updateOne({ _id: Number(id) }, { $set: { passwordHash } });
   return getUserById(id);
+}
+
+// 会員ごとの動画(タイトル+URL、最大MAX_MEMBER_VIDEOS本)
+async function addMemberVideo(id, { title, url, createdAt }) {
+  const db = await getDb();
+  const user = await db.collection('users').findOne({ _id: Number(id) });
+  if (!user) throw new Error('会員が見つかりません');
+  const existing = user.videos || [];
+  if (existing.length >= MAX_MEMBER_VIDEOS) {
+    throw new Error(`動画は最大${MAX_MEMBER_VIDEOS}本までです`);
+  }
+  const videoId = await nextSeq('videos');
+  const video = { id: videoId, title, url, createdAt };
+  await db.collection('users').updateOne({ _id: Number(id) }, { $push: { videos: video } });
+  return video;
+}
+
+async function removeMemberVideo(id, videoId) {
+  const db = await getDb();
+  await db.collection('users').updateOne({ _id: Number(id) }, { $pull: { videos: { id: Number(videoId) } } });
 }
 
 async function deleteUser(id) {
@@ -208,6 +230,17 @@ async function addBoardReply({ postId, adminName, body, createdAt }) {
   return reply;
 }
 
+// 投稿者本人だけが自分の投稿を削除できる
+async function deleteBoardPost(postId, authorId) {
+  const db = await getDb();
+  const post = await db.collection('posts').findOne({ _id: Number(postId) });
+  if (!post) throw new Error('投稿が見つかりません');
+  if (post.authorId !== Number(authorId)) {
+    throw new Error('この投稿を削除する権限がありません');
+  }
+  await db.collection('posts').deleteOne({ _id: Number(postId) });
+}
+
 // --- バックアップ / 復元 ---
 async function exportRaw() {
   const db = await getDb();
@@ -220,6 +253,7 @@ async function exportRaw() {
   const messagesCounter = await db.collection('counters').findOne({ _id: 'messages' });
   const postsCounter = await db.collection('counters').findOne({ _id: 'posts' });
   const repliesCounter = await db.collection('counters').findOne({ _id: 'replies' });
+  const videosCounter = await db.collection('counters').findOne({ _id: 'videos' });
   const data = {
     users: users.map((u) => ({
       id: u._id,
@@ -228,6 +262,7 @@ async function exportRaw() {
       passwordHash: u.passwordHash,
       role: u.role,
       rewardsGiven: u.rewardsGiven || 0,
+      videos: u.videos || [],
     })),
     checkins: checkins.map((c) => ({ id: c._id, userId: c.userId, date: c.date })),
     messages: messages.map((m) => ({
@@ -251,6 +286,7 @@ async function exportRaw() {
     nextMessageId: (messagesCounter ? messagesCounter.seq : 0) + 1,
     nextPostId: (postsCounter ? postsCounter.seq : 0) + 1,
     nextReplyId: (repliesCounter ? repliesCounter.seq : 0) + 1,
+    nextVideoId: (videosCounter ? videosCounter.seq : 0) + 1,
   };
   return JSON.stringify(data, null, 2);
 }
@@ -276,6 +312,7 @@ async function importRaw(jsonStr) {
         passwordHash: u.passwordHash,
         role: u.role,
         rewardsGiven: u.rewardsGiven || 0,
+        videos: u.videos || [],
       }))
     );
   }
@@ -311,11 +348,13 @@ async function importRaw(jsonStr) {
   const maxMessageId = messages.reduce((m, x) => Math.max(m, x.id), 0);
   const maxPostId = posts.reduce((m, x) => Math.max(m, x.id), 0);
   const maxReplyId = posts.flatMap((p) => (p.replies || []).map((r) => r.id)).reduce((m, id) => Math.max(m, id), 0);
+  const maxVideoId = parsed.users.flatMap((u) => (u.videos || []).map((v) => v.id)).reduce((m, id) => Math.max(m, id), 0);
   await db.collection('counters').updateOne({ _id: 'users' }, { $set: { seq: maxUserId } }, { upsert: true });
   await db.collection('counters').updateOne({ _id: 'checkins' }, { $set: { seq: maxCheckinId } }, { upsert: true });
   await db.collection('counters').updateOne({ _id: 'messages' }, { $set: { seq: maxMessageId } }, { upsert: true });
   await db.collection('counters').updateOne({ _id: 'posts' }, { $set: { seq: maxPostId } }, { upsert: true });
   await db.collection('counters').updateOne({ _id: 'replies' }, { $set: { seq: maxReplyId } }, { upsert: true });
+  await db.collection('counters').updateOne({ _id: 'videos' }, { $set: { seq: maxVideoId } }, { upsert: true });
 }
 
 module.exports = {
@@ -333,11 +372,14 @@ module.exports = {
   removeCheckin,
   getAllCheckins,
   incrementRewardsGiven,
+  addMemberVideo,
+  removeMemberVideo,
   getMessagesForMember,
   addMessage,
   getBoardPosts,
   addBoardPost,
   addBoardReply,
+  deleteBoardPost,
   exportRaw,
   importRaw,
 };
