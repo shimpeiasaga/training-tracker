@@ -165,6 +165,21 @@ function addMessage({ memberId, senderRole, senderName, body, createdAt }) {
   return message;
 }
 
+// 送った本人だけが自分のメッセージを削除できる
+function deleteMessage(messageId, requesterRole, requesterId) {
+  const data = load();
+  const msg = data.messages.find((m) => m.id === Number(messageId));
+  if (!msg) throw new Error('メッセージが見つかりません');
+  if (msg.senderRole !== requesterRole) {
+    throw new Error('このメッセージを削除する権限がありません');
+  }
+  if (requesterRole === 'member' && msg.memberId !== Number(requesterId)) {
+    throw new Error('このメッセージを削除する権限がありません');
+  }
+  data.messages = data.messages.filter((m) => m.id !== Number(messageId));
+  save(data);
+}
+
 // --- 会員向け掲示板(会員が投稿、返信できるのは管理者のみ) ---
 function getBoardPosts() {
   return load()
@@ -256,6 +271,7 @@ module.exports = {
   removeMemberVideo,
   getMessagesForMember,
   addMessage,
+  deleteMessage,
   getBoardPosts,
   addBoardPost,
   addBoardReply,
