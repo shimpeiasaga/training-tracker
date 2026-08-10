@@ -125,6 +125,7 @@ const server = http.createServer(async (req, res) => {
     const checkins = (await db.getCheckinsForUser(user.id)).map((c) => c.date);
     const today = stats.todayStr();
     const streak = stats.currentStreak(checkins);
+    const totalDays = checkins.length; // バッジは連続日数ではなく累計実施日数で判定する
     const celebrate = url.searchParams.get('celebrate') === '1';
     const rewardCelebrate = celebrate && url.searchParams.get('reward') === '1';
     return sendHtml(
@@ -135,23 +136,78 @@ const server = http.createServer(async (req, res) => {
         today,
         checkedToday: checkins.includes(today),
         streak,
+        totalDays,
         weekCount: stats.thisWeekCount(checkins),
-        grid: stats.dailyGrid(checkins, 56),
+        grid: stats.dailyGrid(checkins, 28),
         weekly: stats.weeklySeries(checkins, 8),
         monthCount: stats.currentMonthCount(checkins),
         monthGoal: stats.MONTHLY_GOAL,
         monthlyStreak: stats.currentMonthlyStreak(checkins),
         rewardMonths: stats.REWARD_MONTHS,
-        badges: stats.streakBadges(streak),
-        nextBadge: stats.nextStreakBadge(streak),
+        badges: stats.streakBadges(totalDays),
+        nextBadge: stats.nextStreakBadge(totalDays),
         ranked: await computeMonthlyRanking(),
         userId: user.id,
         celebrate,
-        milestoneBadge: celebrate ? stats.justUnlockedBadge(streak) : null,
+        milestoneBadge: celebrate ? stats.justUnlockedBadge(totalDays) : null,
         rewardCelebrate,
         checkinDates: checkins,
+        badgeLog: stats.badgeUnlockLog(checkins),
+        messages: await db.getMessagesForMember(user.id),
       })
     );
+  }
+
+  if (pathname === '/member/messages' && method === 'POST') {
+    const body = await parseBody(req);
+    const text = (body.body || '').trim();
+    if (text) {
+      await db.addMessage({
+        memberId: user.id,
+        senderRole: 'member',
+        senderName: user.name,
+        body: text,
+        createdAt: stats.nowStr(),
+      });
+    }
+    return redirect(res, '/member#messages');
+  }
+
+  // --- 会員向け掲示板(誰でも投稿できる、返信できるのは管理者のみ) ---
+  if (pathname === '/board' && method === 'GET') {
+    return sendHtml(
+      res,
+      200,
+      views.boardPage({
+        posts: await db.getBoardPosts(),
+        userRole: user.role,
+        userName: user.name,
+        error: url.searchParams.get('error'),
+      })
+    );
+  }
+
+  if (pathname === '/board/post' && method === 'POST') {
+    const body = await parseBody(req);
+    const text = (body.body || '').trim();
+    if (text) {
+      await db.addBoardPost({ authorId: user.id, authorName: user.name, body: text, createdAt: stats.nowStr() });
+    }
+    return redirect(res, '/board');
+  }
+
+  let boardMatch = pathname.match(/^\/board\/(\d+)\/reply$/);
+  if (boardMatch && method === 'POST') {
+    if (user.role !== 'admin') {
+      res.writeHead(403);
+      return res.end('権限がありません');
+    }
+    const body = await parseBody(req);
+    const text = (body.body || '').trim();
+    if (text) {
+      await db.addBoardReply({ postId: boardMatch[1], adminName: user.name, body: text, createdAt: stats.nowStr() });
+    }
+    return redirect(res, '/board');
   }
 
   if (pathname === '/member/checkin' && method === 'POST') {
@@ -201,7 +257,7 @@ const server = http.createServer(async (req, res) => {
           const monthlyStreak = stats.currentMonthlyStreak(checkins);
           const earned = stats.rewardsEarned(monthlyStreak);
           const given = m.rewardsGiven || 0;
-          const unlockedBadges = stats.streakBadges(streak).filter((b) => b.achieved);
+          const unlockedBadges = stats.streakBadges(checkins.length).filter((b) => b.achieved);
           const topBadge = unlockedBadges.length ? unlockedBadges[unlockedBadges.length - 1] : null;
           return {
             id: m.id,
@@ -281,6 +337,22 @@ const server = http.createServer(async (req, res) => {
       return redirect(res, '/admin?message=' + encodeURIComponent('特典を渡した記録を追加しました'));
     }
 
+    match = pathname.match(/^\/admin\/members\/(\d+)\/messages$/);
+    if (match && method === 'POST') {
+      const body = await parseBody(req);
+      const text = (body.body || '').trim();
+      if (text) {
+        await db.addMessage({
+          memberId: match[1],
+          senderRole: 'admin',
+          senderName: user.name,
+          body: text,
+          createdAt: stats.nowStr(),
+        });
+      }
+      return redirect(res, `/admin/member/${match[1]}#messages`);
+    }
+
     if (pathname === '/admin/backup' && method === 'GET') {
       const raw = await db.exportRaw();
       const filename = `training-tracker-backup-${stats.todayStr()}.json`;
@@ -325,7 +397,7 @@ const server = http.createServer(async (req, res) => {
           streak: memberStreak,
           weekCount: stats.thisWeekCount(checkins),
           total: checkins.length,
-          grid: stats.dailyGrid(checkins, 84),
+          grid: stats.dailyGrid(checkins, 28),
           weekly: stats.weeklySeries(checkins, 12),
           monthCount: stats.currentMonthCount(checkins),
           monthlyStreak,
@@ -333,8 +405,10 @@ const server = http.createServer(async (req, res) => {
           rewardsEarned: earned,
           rewardsGiven: given,
           rewardsPending: Math.max(0, earned - given),
-          badges: stats.streakBadges(memberStreak),
+          badges: stats.streakBadges(checkins.length),
           checkinDates: checkins,
+          badgeLog: stats.badgeUnlockLog(checkins),
+          messages: await db.getMessagesForMember(member.id),
         })
       );
     }
