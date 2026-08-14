@@ -91,12 +91,12 @@ function topbar(label, showLogout = true) {
 
 function loginPage(error) {
   return layout({
-    title: 'ログイン | トレーニング記録',
+    title: 'ログイン | オンライン運動元気倶楽部',
     topbar: '',
     body: `
     <div class="login-wrap">
       <div class="card login-card">
-        <h1>トレーニング記録</h1>
+        <h1>オンライン運動元気倶楽部</h1>
         ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
         <form method="POST" action="/login">
           <div class="form-row">
@@ -176,7 +176,7 @@ function historyListHtml(checkinRecords, { limit = 30, editable = false } = {}) 
           ${
             editable
               ? `<details class="history-note-edit">
-                  <summary>${note ? 'メモを編集' : 'セット数・回数などメモを追加'}</summary>
+                  <summary>${note ? 'メモを編集' : 'メモを追加(自由記入)'}</summary>
                   <form method="POST" action="/member/checkins/${c.date}/note" class="inline-form">
                     <div class="form-row">
                       <textarea name="note" rows="2" maxlength="300" placeholder="例: スクワット3セット×10回、ベンチプレス...">${escapeHtml(note)}</textarea>
@@ -279,7 +279,7 @@ function leaderboardHtml(ranked, currentUserId, limit = 3) {
 function confettiScript(gold = false) {
   const colors = gold
     ? ['#ffd700', '#ffb703', '#f4a261', '#e9c46a', '#fff3b0']
-    : ['#40916c', '#2d6a4f', '#ffb703', '#f4a261', '#e76f51', '#8ecae6'];
+    : ['#3b82f6', '#1d4ed8', '#ffb703', '#f4a261', '#e76f51', '#8ecae6'];
   const count = gold ? 80 : 40;
   return `
     (function() {
@@ -350,18 +350,8 @@ function memberPage({
   badgeLog,
   messages,
   media,
-  trainingMenu,
 }) {
   const script = `
-    const weekly = ${JSON.stringify(weekly)};
-    new Chart(document.getElementById('weeklyChart'), {
-      type: 'bar',
-      data: {
-        labels: weekly.map(w => w.weekStart),
-        datasets: [{ label: '週の実施回数', data: weekly.map(w => w.count), backgroundColor: '#40916c' }]
-      },
-      options: { scales: { y: { beginAtZero: true, max: 7, ticks: { stepSize: 1 } } }, plugins: { legend: { display: false } } }
-    });
     ${celebrate ? confettiScript(rewardCelebrate) : ''}`;
 
   const celebrateBanner = celebrate
@@ -377,24 +367,14 @@ function memberPage({
     : '';
 
   return layout({
-    title: 'マイページ | トレーニング記録',
+    title: 'マイページ | オンライン運動元気倶楽部',
     topbar: topbar(`${escapeHtml(userName)} さん`),
     script,
     body: `
     ${celebrateBanner}
 
-    <div class="card" id="menu">
-      <h3>📋 今のトレーニングメニュー</h3>
-      ${
-        trainingMenu && trainingMenu.text
-          ? `<p style="white-space:pre-wrap;word-break:break-word;margin:0 0 6px;">${escapeHtml(trainingMenu.text)}</p>
-             <p style="font-size:0.78rem;color:var(--muted);margin:0;">更新: ${escapeHtml(trainingMenu.updatedAt)}</p>`
-          : '<p style="font-size:0.85rem;color:var(--muted);margin:0;">まだ管理者からメニューは設定されていません</p>'
-      }
-    </div>
-
     <div class="card" id="video">
-      <h3>🎥📷 あなた専用のトレーニング動画・画像(${(media || []).length}/${MAX_MEMBER_MEDIA})</h3>
+      <h3>🎥📷 ${escapeHtml(userName)}さんの専用トレーニング</h3>
       ${mediaListHtml(media)}
     </div>
 
@@ -442,21 +422,16 @@ function memberPage({
     </div>
 
     <div class="card">
-      <h3>🏆 今月のランキング(${ranked.length}人中)</h3>
+      <h3>🏆 今月のランキング(上位3名掲載)</h3>
       ${leaderboardHtml(ranked, userId)}
     </div>
 
-    <div class="card">
-      <h3>週ごとの実施回数</h3>
-      <canvas id="weeklyChart" height="120"></canvas>
-    </div>
-
     <div class="card" id="messages">
-      <h3>📩 管理者とのメッセージ</h3>
+      <h3>📩 アドバイザーとのメッセージ</h3>
       ${messageThreadHtml(messages, { viewerRole: 'member', deleteBasePath: '/member/messages' })}
       <form method="POST" action="/member/messages" class="inline-form">
         <div class="form-row">
-          <label>管理者にメッセージを送る</label>
+          <label>アドバイザーにメッセージを送る</label>
           <input type="text" name="body" maxlength="500" required>
         </div>
         <button class="btn primary" type="submit">送信</button>
@@ -464,13 +439,26 @@ function memberPage({
     </div>
 
     <div class="card">
-      <h3>パスワード変更</h3>
+      <a class="btn" href="/member/password">🔑 パスワード変更</a>
+    </div>`,
+  });
+}
+
+function memberPasswordPage({ userName, error, message }) {
+  return layout({
+    title: 'パスワード変更 | オンライン運動元気倶楽部',
+    topbar: `<div class="topbar"><span class="brand"><a href="/member">&larr; 戻る</a></span><div class="topbar-actions"><a href="/board">💬 みんなの掲示板</a><form method="POST" action="/logout"><button type="submit">ログアウト</button></form></div></div>`,
+    body: `
+    ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
+    <div class="card">
+      <h2>🔑 パスワード変更</h2>
+      ${message ? `<p style="font-size:0.85rem;color:var(--primary);margin:0 0 12px;">${escapeHtml(message)}</p>` : ''}
       <form method="POST" action="/member/password" class="inline-form">
         <div class="form-row">
           <label>新しいパスワード(4文字以上)</label>
           <input type="password" name="newPassword" minlength="4" required>
         </div>
-        <button class="btn" type="submit">変更</button>
+        <button class="btn primary" type="submit">変更する</button>
       </form>
     </div>`,
   });
@@ -513,13 +501,13 @@ function adminPage({ members, teamWeekly, ranked, error, message }) {
       type: 'line',
       data: {
         labels: teamWeekly.map(w => w.weekStart),
-        datasets: [{ label: '会員1人あたり週平均実施回数', data: teamWeekly.map(w => w.avg), borderColor: '#2d6a4f', backgroundColor: 'rgba(45,106,79,0.15)', fill: true, tension: 0.3 }]
+        datasets: [{ label: '会員1人あたり週平均実施回数', data: teamWeekly.map(w => w.avg), borderColor: '#1d4ed8', backgroundColor: 'rgba(29,78,216,0.15)', fill: true, tension: 0.3 }]
       },
       options: { scales: { y: { beginAtZero: true, max: 7 } } }
     });`;
 
   return layout({
-    title: '管理者ダッシュボード | トレーニング記録',
+    title: '管理者ダッシュボード | オンライン運動元気倶楽部',
     topbar: topbar('管理者ダッシュボード'),
     script,
     body: `
@@ -578,15 +566,6 @@ function adminPage({ members, teamWeekly, ranked, error, message }) {
 
 function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGrid, prevMonthKey, nextMonthKey, calendarBasePath, weekly, monthCount, monthlyStreak, monthlySeries, rewardsEarned, rewardsGiven, rewardsPending, badges, checkinDates, checkinRecords, badgeLog, messages, media, videoError }) {
   const script = `
-    const weekly = ${JSON.stringify(weekly)};
-    new Chart(document.getElementById('memberChart'), {
-      type: 'bar',
-      data: {
-        labels: weekly.map(w => w.weekStart),
-        datasets: [{ label: '週の実施回数', data: weekly.map(w => w.count), backgroundColor: '#40916c' }]
-      },
-      options: { scales: { y: { beginAtZero: true, max: 7, ticks: { stepSize: 1 } } }, plugins: { legend: { display: false } } }
-    });
     const monthlySeries = ${JSON.stringify(monthlySeries)};
     new Chart(document.getElementById('monthlyChart'), {
       type: 'bar',
@@ -595,14 +574,14 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
         datasets: [{
           label: '月の実施回数',
           data: monthlySeries.map(m => m.count),
-          backgroundColor: monthlySeries.map(m => m.achieved ? '#2d6a4f' : '#c0d6c8'),
+          backgroundColor: monthlySeries.map(m => m.achieved ? '#1d4ed8' : '#bfdbfe'),
         }]
       },
       options: { scales: { y: { beginAtZero: true, ticks: { stepSize: 2 } } }, plugins: { legend: { display: false } } }
     });`;
 
   return layout({
-    title: `${escapeHtml(member.name)} の詳細 | トレーニング記録`,
+    title: `${escapeHtml(member.name)} の詳細 | オンライン運動元気倶楽部`,
     topbar: `<div class="topbar"><span class="brand"><a href="/admin">&larr; 管理者ダッシュボード</a></span><div class="topbar-actions"><a href="/board">💬 みんなの掲示板</a><form method="POST" action="/logout"><button type="submit">ログアウト</button></form></div></div>`,
     script,
     body: `
@@ -616,23 +595,6 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
       <h3>${formatMonthJa(monthKeyForGrid)}のカレンダー</h3>
       ${calendarNavHtml(calendarBasePath, prevMonthKey, nextMonthKey)}
       ${gridHtml(grid)}
-    </div>
-
-    <div class="card" id="menu">
-      <h3>📋 トレーニングメニュー(セット数・回数の目標)</h3>
-      ${
-        member.trainingMenu && member.trainingMenu.text
-          ? `<p style="white-space:pre-wrap;word-break:break-word;margin:0 0 6px;">${escapeHtml(member.trainingMenu.text)}</p>
-             <p style="font-size:0.78rem;color:var(--muted);margin:0 0 12px;">更新: ${escapeHtml(member.trainingMenu.updatedAt)}</p>`
-          : '<p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">まだ設定されていません</p>'
-      }
-      <form method="POST" action="/admin/members/${member.id}/training-menu" class="inline-form">
-        <div class="form-row">
-          <label>内容を更新(上書きされます)</label>
-          <textarea name="text" rows="3" maxlength="500" placeholder="例: スクワット3セット×10回、ベンチプレス4セット×8回">${member.trainingMenu ? escapeHtml(member.trainingMenu.text) : ''}</textarea>
-        </div>
-        <button class="btn primary" type="submit">更新する</button>
-      </form>
     </div>
 
     <div class="card" id="video">
@@ -688,11 +650,6 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
     <div class="card">
       <h3>🎖 ランクアップ履歴</h3>
       ${badgeLogHtml(badgeLog)}
-    </div>
-
-    <div class="card">
-      <h3>週ごとの実施回数</h3>
-      <canvas id="memberChart" height="120"></canvas>
     </div>
 
     <div class="card" id="messages">
@@ -778,7 +735,7 @@ function boardPage({ posts, userRole, userName, userId, error }) {
     : '<div class="card"><p style="font-size:0.85rem;color:var(--muted);margin:0;">まだ投稿がありません</p></div>';
 
   return layout({
-    title: 'みんなの掲示板 | トレーニング記録',
+    title: 'みんなの掲示板 | オンライン運動元気倶楽部',
     topbar: `<div class="topbar"><span class="brand"><a href="${userRole === 'admin' ? '/admin' : '/member'}">&larr; 戻る</a></span><form method="POST" action="/logout"><button type="submit">ログアウト</button></form></div>`,
     body: `
     ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
@@ -797,4 +754,4 @@ function boardPage({ posts, userRole, userName, userId, error }) {
   });
 }
 
-module.exports = { escapeHtml, loginPage, memberPage, adminPage, adminMemberPage, boardPage };
+module.exports = { escapeHtml, loginPage, memberPage, memberPasswordPage, adminPage, adminMemberPage, boardPage };
