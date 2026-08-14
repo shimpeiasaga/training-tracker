@@ -116,8 +116,8 @@ function thisWeekCount(checkinDates) {
 const MONTHLY_GOAL = 10; // 月にこの回数以上で「達成」
 const REWARD_MONTHS = 3; // この月数連続達成で特典1回分
 
-// 会員1人あたりに登録できる動画の最大本数
-const MAX_MEMBER_VIDEOS = 10;
+// 会員1人あたりに登録できる動画・画像(合わせて)の最大件数
+const MAX_MEMBER_MEDIA = 10;
 
 function monthKey(dateStr) {
   return dateStr.slice(0, 7); // "YYYY-MM"
@@ -231,7 +231,7 @@ module.exports = {
   thisWeekCount,
   MONTHLY_GOAL,
   REWARD_MONTHS,
-  MAX_MEMBER_VIDEOS,
+  MAX_MEMBER_MEDIA,
   monthKey,
   addMonths,
   countForMonth,
