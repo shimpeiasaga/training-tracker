@@ -121,16 +121,6 @@ function createUser({ name, username, passwordHash, role }) {
   return user;
 }
 
-// 管理者が指定するトレーニングメニュー(セット数・回数の目標)。常に最新の内容で上書きする
-function updateTrainingMenu(id, { text, updatedAt }) {
-  const data = load();
-  const user = data.users.find((u) => u.id === Number(id));
-  if (!user) throw new Error('会員が見つかりません');
-  user.trainingMenu = { text, updatedAt };
-  save(data);
-  return user.trainingMenu;
-}
-
 // 特典を1回渡した記録を追加する
 function incrementRewardsGiven(id) {
   const data = load();
@@ -337,7 +327,6 @@ module.exports = {
   getAllMembers,
   createUser,
   updateUserPassword,
-  updateTrainingMenu,
   deleteUser,
   getCheckinsForUser,
   hasCheckinForDate,
