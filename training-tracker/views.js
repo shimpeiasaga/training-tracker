@@ -1,5 +1,5 @@
 // HTMLをテンプレートエンジンなしで生成する(外部依存なし)
-const { MONTHLY_GOAL, REWARD_MONTHS, MAX_MEMBER_VIDEOS } = require('./stats');
+const { MONTHLY_GOAL, REWARD_MONTHS, MAX_MEMBER_MEDIA } = require('./stats');
 const CHART_JS = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js';
 
 function escapeHtml(str) {
@@ -27,26 +27,32 @@ function videoPlayerHtml(video) {
   return `<p style="font-size:0.9rem;"><a href="${escapeHtml(video.url)}" target="_blank" rel="noopener">動画を開く &rarr;</a></p>`;
 }
 
-// 会員ごとの動画一覧(最大MAX_MEMBER_VIDEOS本、deletable=trueで削除ボタン付き)
-function videoListHtml(videos, { deletable = false, memberId } = {}) {
-  if (!videos || !videos.length) {
-    return '<p style="font-size:0.85rem;color:var(--muted);margin:0;">まだ動画は登録されていません</p>';
+// 画像1枚ぶんの表示(base64で保存した画像データをそのまま埋め込む)
+function imageDisplayHtml(item) {
+  return `<img class="media-image" src="data:${escapeHtml(item.mimeType)};base64,${item.imageData}" alt="${escapeHtml(item.title)}">`;
+}
+
+// 会員ごとの動画・画像一覧(合わせて最大MAX_MEMBER_MEDIA件、deletable=trueで削除ボタン付き)
+function mediaListHtml(media, { deletable = false, memberId } = {}) {
+  if (!media || !media.length) {
+    return '<p style="font-size:0.85rem;color:var(--muted);margin:0;">まだ動画・画像は登録されていません</p>';
   }
-  const items = videos
+  const items = media
     .map(
       (v) => `
       <div class="video-item">
         <div class="video-item-head">
-          <h4>${escapeHtml(v.title)}</h4>
+          <h4>${v.type === 'image' ? '📷' : '🎥'} ${escapeHtml(v.title)}</h4>
           ${
             deletable
-              ? `<form method="POST" action="/admin/members/${memberId}/videos/${v.id}/delete" onsubmit="return confirm('この動画を削除しますか?');">
+              ? `<form method="POST" action="/admin/members/${memberId}/media/${v.id}/delete" onsubmit="return confirm('削除しますか?');">
                   <button class="btn danger" type="submit">削除</button>
                 </form>`
               : ''
           }
         </div>
-        ${videoPlayerHtml(v)}
+        ${v.note ? `<p class="media-note">${escapeHtml(v.note)}</p>` : ''}
+        ${v.type === 'image' ? imageDisplayHtml(v) : videoPlayerHtml(v)}
       </div>`
     )
     .join('');
@@ -152,13 +158,38 @@ function calendarNavHtml(basePath, prevMonthKey, nextMonthKey) {
 }
 
 // 実施した日を新しい順に一覧表示する(「何月何日にできたか」がひと目で分かるように)
-function historyListHtml(checkinDates, limit = 30) {
-  if (!checkinDates.length) {
+// checkinRecords: [{date, note}, ...]。editable=trueだと各行にメモの追加・編集フォームを出す(本人のみ)
+function historyListHtml(checkinRecords, { limit = 30, editable = false } = {}) {
+  if (!checkinRecords.length) {
     return '<p style="font-size:0.85rem;color:var(--muted);margin:0;">まだ記録がありません</p>';
   }
-  const sortedDesc = [...checkinDates].sort((a, b) => b.localeCompare(a));
+  const sortedDesc = [...checkinRecords].sort((a, b) => b.date.localeCompare(a.date));
   const shown = sortedDesc.slice(0, limit);
-  const items = shown.map((d) => `<li>${formatDateJa(d)}</li>`).join('');
+  const items = shown
+    .map((c) => {
+      const note = c.note || '';
+      return `
+      <li>
+        <div class="history-row">
+          <span>${formatDateJa(c.date)}</span>
+          ${note ? `<div class="history-note">${escapeHtml(note)}</div>` : ''}
+          ${
+            editable
+              ? `<details class="history-note-edit">
+                  <summary>${note ? 'メモを編集' : 'セット数・回数などメモを追加'}</summary>
+                  <form method="POST" action="/member/checkins/${c.date}/note" class="inline-form">
+                    <div class="form-row">
+                      <textarea name="note" rows="2" maxlength="300" placeholder="例: スクワット3セット×10回、ベンチプレス...">${escapeHtml(note)}</textarea>
+                    </div>
+                    <button class="btn" type="submit">保存</button>
+                  </form>
+                </details>`
+              : ''
+          }
+        </div>
+      </li>`;
+    })
+    .join('');
   const more = sortedDesc.length > limit ? `<p style="font-size:0.8rem;color:var(--muted);margin:8px 0 0;">他${sortedDesc.length - limit}件</p>` : '';
   return `<ul class="history-list">${items}</ul>${more}`;
 }
@@ -315,9 +346,11 @@ function memberPage({
   milestoneBadge,
   rewardCelebrate,
   checkinDates,
+  checkinRecords,
   badgeLog,
   messages,
-  videos,
+  media,
+  trainingMenu,
 }) {
   const script = `
     const weekly = ${JSON.stringify(weekly)};
@@ -350,9 +383,19 @@ function memberPage({
     body: `
     ${celebrateBanner}
 
+    <div class="card" id="menu">
+      <h3>📋 今のトレーニングメニュー</h3>
+      ${
+        trainingMenu && trainingMenu.text
+          ? `<p style="white-space:pre-wrap;word-break:break-word;margin:0 0 6px;">${escapeHtml(trainingMenu.text)}</p>
+             <p style="font-size:0.78rem;color:var(--muted);margin:0;">更新: ${escapeHtml(trainingMenu.updatedAt)}</p>`
+          : '<p style="font-size:0.85rem;color:var(--muted);margin:0;">まだ管理者からメニューは設定されていません</p>'
+      }
+    </div>
+
     <div class="card" id="video">
-      <h3>🎥 あなた専用のトレーニング動画(${(videos || []).length}/${MAX_MEMBER_VIDEOS})</h3>
-      ${videoListHtml(videos)}
+      <h3>🎥📷 あなた専用のトレーニング動画・画像(${(media || []).length}/${MAX_MEMBER_MEDIA})</h3>
+      ${mediaListHtml(media)}
     </div>
 
     <div class="card">
@@ -387,9 +430,10 @@ function memberPage({
       ${gridHtml(grid)}
     </div>
 
-    <div class="card">
+    <div class="card" id="history">
       <h3>実施した日</h3>
-      ${historyListHtml(checkinDates)}
+      <p style="font-size:0.8rem;color:var(--muted);margin:0 0 8px;">日付をタップすると、セット数・回数などのメモを追加・編集できます</p>
+      ${historyListHtml(checkinRecords, { editable: true })}
     </div>
 
     <div class="card">
@@ -532,7 +576,7 @@ function adminPage({ members, teamWeekly, ranked, error, message }) {
   });
 }
 
-function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGrid, prevMonthKey, nextMonthKey, calendarBasePath, weekly, monthCount, monthlyStreak, monthlySeries, rewardsEarned, rewardsGiven, rewardsPending, badges, checkinDates, badgeLog, messages, videos, videoError }) {
+function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGrid, prevMonthKey, nextMonthKey, calendarBasePath, weekly, monthCount, monthlyStreak, monthlySeries, rewardsEarned, rewardsGiven, rewardsPending, badges, checkinDates, checkinRecords, badgeLog, messages, media, videoError }) {
   const script = `
     const weekly = ${JSON.stringify(weekly)};
     new Chart(document.getElementById('memberChart'), {
@@ -574,30 +618,66 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
       ${gridHtml(grid)}
     </div>
 
-    <div class="card" id="video">
-      <h3>🎥 この会員専用の動画(${(videos || []).length}/${MAX_MEMBER_VIDEOS})</h3>
-      ${videoError ? `<div class="error">${escapeHtml(videoError)}</div>` : ''}
-      ${videoListHtml(videos, { deletable: true, memberId: member.id })}
+    <div class="card" id="menu">
+      <h3>📋 トレーニングメニュー(セット数・回数の目標)</h3>
       ${
-        (videos || []).length < MAX_MEMBER_VIDEOS
-          ? `<form method="POST" action="/admin/members/${member.id}/videos" class="inline-form" style="margin-top:12px;">
+        member.trainingMenu && member.trainingMenu.text
+          ? `<p style="white-space:pre-wrap;word-break:break-word;margin:0 0 6px;">${escapeHtml(member.trainingMenu.text)}</p>
+             <p style="font-size:0.78rem;color:var(--muted);margin:0 0 12px;">更新: ${escapeHtml(member.trainingMenu.updatedAt)}</p>`
+          : '<p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">まだ設定されていません</p>'
+      }
+      <form method="POST" action="/admin/members/${member.id}/training-menu" class="inline-form">
+        <div class="form-row">
+          <label>内容を更新(上書きされます)</label>
+          <textarea name="text" rows="3" maxlength="500" placeholder="例: スクワット3セット×10回、ベンチプレス4セット×8回">${member.trainingMenu ? escapeHtml(member.trainingMenu.text) : ''}</textarea>
+        </div>
+        <button class="btn primary" type="submit">更新する</button>
+      </form>
+    </div>
+
+    <div class="card" id="video">
+      <h3>🎥📷 この会員専用の動画・画像(${(media || []).length}/${MAX_MEMBER_MEDIA})</h3>
+      ${videoError ? `<div class="error">${escapeHtml(videoError)}</div>` : ''}
+      ${mediaListHtml(media, { deletable: true, memberId: member.id })}
+      ${
+        (media || []).length < MAX_MEMBER_MEDIA
+          ? `<form method="POST" action="/admin/members/${member.id}/media/video" class="inline-form" style="margin-top:12px;">
               <div class="form-row">
-                <label>タイトル</label>
+                <label>動画タイトル</label>
                 <input type="text" name="title" maxlength="60" required placeholder="例: スクワットフォーム講座">
               </div>
               <div class="form-row">
                 <label>動画URL(YouTubeのURLを推奨)</label>
                 <input type="text" name="url" required placeholder="https://www.youtube.com/watch?v=...">
               </div>
-              <button class="btn primary" type="submit">追加</button>
+              <div class="form-row">
+                <label>セット数・回数(任意)</label>
+                <input type="text" name="note" maxlength="200" placeholder="例: 3セット×10回">
+              </div>
+              <button class="btn primary" type="submit">動画を追加</button>
+            </form>
+            <form method="POST" action="/admin/members/${member.id}/media/image" enctype="multipart/form-data" class="inline-form" style="margin-top:12px;">
+              <div class="form-row">
+                <label>画像タイトル</label>
+                <input type="text" name="title" maxlength="60" required placeholder="例: 8月のフォームチェック">
+              </div>
+              <div class="form-row">
+                <label>画像ファイル(jpg/png/webp/gif、5MBまで)</label>
+                <input type="file" name="image" accept="image/*" required>
+              </div>
+              <div class="form-row">
+                <label>セット数・回数(任意)</label>
+                <input type="text" name="note" maxlength="200" placeholder="例: 3セット×10回">
+              </div>
+              <button class="btn primary" type="submit">画像を追加</button>
             </form>`
-          : `<p style="font-size:0.85rem;color:var(--muted);margin-top:12px;">上限の${MAX_MEMBER_VIDEOS}本に達しています。追加するには先に削除してください。</p>`
+          : `<p style="font-size:0.85rem;color:var(--muted);margin-top:12px;">上限の${MAX_MEMBER_MEDIA}件に達しています。追加するには先に削除してください。</p>`
       }
     </div>
 
     <div class="card">
       <h3>実施した日</h3>
-      ${historyListHtml(checkinDates)}
+      ${historyListHtml(checkinRecords)}
     </div>
 
     <div class="card">
