@@ -1,11 +1,11 @@
 :root {
-  --primary: #2d6a4f;
-  --primary-light: #40916c;
-  --bg: #f6f8f6;
+  --primary: #2563eb;
+  --primary-light: #3b82f6;
+  --bg: #f5f7fb;
   --card: #ffffff;
-  --border: #e0e5e0;
-  --text: #1b2a20;
-  --muted: #6b7a70;
+  --border: #dfe4ee;
+  --text: #1b2333;
+  --muted: #64748b;
   --danger: #c0392b;
 }
 
@@ -71,7 +71,7 @@ h1, h2, h3 { margin-top: 0; }
 .stat-box {
   flex: 1;
   min-width: 120px;
-  background: #eef5f0;
+  background: #eaf2fd;
   border-radius: 8px;
   padding: 14px;
   text-align: center;
@@ -130,7 +130,7 @@ h1, h2, h3 { margin-top: 0; }
 .grid .day {
   aspect-ratio: 1;
   border-radius: 4px;
-  background: #e6ece7;
+  background: #e7edf6;
   position: relative;
 }
 .grid .day.empty { background: transparent; }
@@ -206,7 +206,7 @@ th { color: var(--muted); font-weight: 600; }
 tr:hover { background: #fafcfa; }
 
 .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; }
-.badge.good { background: #d8f0e0; color: var(--primary); }
+.badge.good { background: #dbeafe; color: var(--primary); }
 .badge.warn { background: #fdecea; color: var(--danger); }
 
 .btn {
@@ -265,14 +265,14 @@ tr:hover { background: #fafcfa; }
   text-align: center;
   padding: 12px 6px;
   border-radius: 10px;
-  background: #eef2ef;
+  background: #eef1f6;
   opacity: 0.45;
   filter: grayscale(1);
 }
 .badge-item.unlocked {
   opacity: 1;
   filter: none;
-  background: #eef5f0;
+  background: #eaf2fd;
   box-shadow: 0 0 0 2px var(--primary-light) inset;
 }
 .badge-item .icon { font-size: 1.8rem; display: block; margin-bottom: 4px; }
@@ -293,7 +293,7 @@ tr:hover { background: #fafcfa; }
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  background: #eef2ef;
+  background: #eef1f6;
   color: var(--muted);
   display: flex;
   align-items: center;
@@ -305,13 +305,13 @@ tr:hover { background: #fafcfa; }
 .leaderboard li.rank-1 .rank { background: #ffe08a; color: #7a5b00; }
 .leaderboard li.rank-2 .rank { background: #dfe3e6; color: #52565a; }
 .leaderboard li.rank-3 .rank { background: #eac9a2; color: #6b4413; }
-.leaderboard li.me { background: #eef5f0; border-radius: 8px; }
+.leaderboard li.me { background: #eaf2fd; border-radius: 8px; }
 .leaderboard .name { flex: 1; }
 .leaderboard .count { font-weight: 700; color: var(--primary); }
 
 /* --- 縺顔･昴＞貍泌� --- */
 .celebrate-banner {
-  background: linear-gradient(135deg, #40916c, #2d6a4f);
+  background: linear-gradient(135deg, #3b82f6, #1d4ed8);
   color: #fff;
   border-radius: 10px;
   padding: 18px 20px;
@@ -362,7 +362,7 @@ tr:hover { background: #fafcfa; }
   margin: 0 0 8px;
   font-size: 0.82rem;
   color: var(--muted);
-  background: #eef5f0;
+  background: #eaf2fd;
   display: inline-block;
   padding: 2px 10px;
   border-radius: 10px;
@@ -406,16 +406,16 @@ tr:hover { background: #fafcfa; }
   max-width: 80%;
   padding: 8px 12px;
   border-radius: 12px;
-  background: #eef2ef;
+  background: #eef1f6;
 }
 .msg-bubble.from-admin {
   align-self: flex-start;
-  background: #eef2ef;
+  background: #eef1f6;
   border-bottom-left-radius: 2px;
 }
 .msg-bubble.from-member {
   align-self: flex-end;
-  background: #d8f0e0;
+  background: #dbeafe;
   border-bottom-right-radius: 2px;
 }
 .msg-meta { font-size: 0.7rem; color: var(--muted); margin-bottom: 2px; }
@@ -435,7 +435,7 @@ tr:hover { background: #fafcfa; }
   margin-top: 10px;
   margin-left: 16px;
   padding: 8px 12px;
-  background: #eef5f0;
+  background: #eaf2fd;
   border-radius: 8px;
   border-left: 3px solid var(--primary-light);
 }
