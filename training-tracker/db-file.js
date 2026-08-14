@@ -169,6 +169,16 @@ function removeMemberMedia(memberId, mediaId) {
   save(data);
 }
 
+// 動画・画像のセット数・回数メモを後から編集する(管理者のみ)
+function updateMemberMediaNote(memberId, mediaId, note) {
+  const data = load();
+  const item = data.media.find((m) => m.id === Number(mediaId) && m.memberId === Number(memberId));
+  if (!item) throw new Error('動画・画像が見つかりません');
+  item.note = note;
+  save(data);
+  return item;
+}
+
 function deleteUser(id) {
   const data = load();
   data.users = data.users.filter(u => u.id !== Number(id));
@@ -338,6 +348,7 @@ module.exports = {
   getMediaForMember,
   addMemberMedia,
   removeMemberMedia,
+  updateMemberMediaNote,
   getMessagesForMember,
   addMessage,
   deleteMessage,
