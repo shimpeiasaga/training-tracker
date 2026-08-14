@@ -32,17 +32,20 @@ function imageDisplayHtml(item) {
   return `<img class="media-image" src="data:${escapeHtml(item.mimeType)};base64,${item.imageData}" alt="${escapeHtml(item.title)}">`;
 }
 
-// 会員ごとの動画・画像一覧(合わせて最大MAX_MEMBER_MEDIA件、deletable=trueで削除ボタン付き)
+// 番号表示用(①②③...)。MAX_MEMBER_MEDIAが10件までなので⑩まであれば足りる
+const CIRCLED_NUMS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
+
+// 会員ごとの動画・画像一覧(合わせて最大MAX_MEMBER_MEDIA件、deletable=trueで削除・メモ編集フォーム付き)
 function mediaListHtml(media, { deletable = false, memberId } = {}) {
   if (!media || !media.length) {
     return '<p style="font-size:0.85rem;color:var(--muted);margin:0;">まだ動画・画像は登録されていません</p>';
   }
   const items = media
     .map(
-      (v) => `
+      (v, i) => `
       <div class="video-item">
         <div class="video-item-head">
-          <h4>${v.type === 'image' ? '📷' : '🎥'} ${escapeHtml(v.title)}</h4>
+          <h4>${CIRCLED_NUMS[i] || i + 1} ${escapeHtml(v.title)}</h4>
           ${
             deletable
               ? `<form method="POST" action="/admin/members/${memberId}/media/${v.id}/delete" onsubmit="return confirm('削除しますか?');">
@@ -52,6 +55,19 @@ function mediaListHtml(media, { deletable = false, memberId } = {}) {
           }
         </div>
         ${v.note ? `<p class="media-note">${escapeHtml(v.note)}</p>` : ''}
+        ${
+          deletable
+            ? `<details class="history-note-edit" style="margin-bottom:8px;">
+                <summary>${v.note ? 'セット数・回数を編集' : 'セット数・回数を追加'}</summary>
+                <form method="POST" action="/admin/members/${memberId}/media/${v.id}/note" class="inline-form">
+                  <div class="form-row">
+                    <input type="text" name="note" maxlength="200" value="${escapeHtml(v.note || '')}" placeholder="例: 3セット×10回">
+                  </div>
+                  <button class="btn" type="submit">保存</button>
+                </form>
+              </details>`
+            : ''
+        }
         ${v.type === 'image' ? imageDisplayHtml(v) : videoPlayerHtml(v)}
       </div>`
     )
