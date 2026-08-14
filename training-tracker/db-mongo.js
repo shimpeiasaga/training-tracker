@@ -107,7 +107,6 @@ function mapUser(doc) {
     passwordHash: doc.passwordHash,
     role: doc.role,
     rewardsGiven: doc.rewardsGiven || 0,
-    trainingMenu: doc.trainingMenu || null,
   };
 }
 
@@ -153,14 +152,6 @@ async function updateUserPassword(id, passwordHash) {
   const db = await getDb();
   await db.collection('users').updateOne({ _id: Number(id) }, { $set: { passwordHash } });
   return getUserById(id);
-}
-
-// 管理者が指定するトレーニングメニュー(セット数・回数の目標)。常に最新の内容で上書きする
-async function updateTrainingMenu(id, { text, updatedAt }) {
-  const db = await getDb();
-  const result = await db.collection('users').updateOne({ _id: Number(id) }, { $set: { trainingMenu: { text, updatedAt } } });
-  if (result.matchedCount === 0) throw new Error('会員が見つかりません');
-  return { text, updatedAt };
 }
 
 // 会員ごとの動画・画像(合わせて最大MAX_MEMBER_MEDIA件、独立したコレクションとして保存する)
@@ -363,7 +354,6 @@ async function exportRaw() {
       passwordHash: u.passwordHash,
       role: u.role,
       rewardsGiven: u.rewardsGiven || 0,
-      trainingMenu: u.trainingMenu || null,
     })),
     checkins: checkins.map((c) => ({ id: c._id, userId: c.userId, date: c.date, note: c.note || '' })),
     messages: messages.map((m) => ({
@@ -426,7 +416,6 @@ async function importRaw(jsonStr) {
         passwordHash: u.passwordHash,
         role: u.role,
         rewardsGiven: u.rewardsGiven || 0,
-        trainingMenu: u.trainingMenu || null,
         // 旧形式のバックアップ(会員に埋め込みのvideos配列)が来た場合はmediaコレクションへ変換して復元する
       }))
     );
@@ -504,7 +493,6 @@ module.exports = {
   getAllMembers,
   createUser,
   updateUserPassword,
-  updateTrainingMenu,
   deleteUser,
   getCheckinsForUser,
   hasCheckinForDate,
