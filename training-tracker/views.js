@@ -79,9 +79,12 @@ ${script ? `<script>${script}</script>` : ''}
 </html>`;
 }
 
-function topbar(label, showLogout = true) {
+function topbar(label, showLogout = true, showSiteTitle = false) {
   return `<div class="topbar">
-    <span class="brand">${label}</span>
+    <span class="brand">
+      ${showSiteTitle ? `<span style="display:block;font-size:0.72rem;font-weight:400;opacity:0.85;line-height:1.4;">オンライン運動元気倶楽部</span>` : ''}
+      <span style="display:block;">${label}</span>
+    </span>
     <div class="topbar-actions">
       <a href="/board">💬 みんなの掲示板</a>
       ${showLogout ? `<form method="POST" action="/logout"><button type="submit">ログアウト</button></form>` : ''}
@@ -368,13 +371,13 @@ function memberPage({
 
   return layout({
     title: 'マイページ | オンライン運動元気倶楽部',
-    topbar: topbar(`${escapeHtml(userName)} さん`),
+    topbar: topbar(`${escapeHtml(userName)} さん`, true, true),
     script,
     body: `
     ${celebrateBanner}
 
     <div class="card" id="video">
-      <h3>🎥📷 ${escapeHtml(userName)}さんの専用トレーニング</h3>
+      <h3>${escapeHtml(userName)}さんの専用トレーニング</h3>
       ${mediaListHtml(media)}
     </div>
 
