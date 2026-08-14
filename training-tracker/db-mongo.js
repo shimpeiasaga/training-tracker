@@ -1,7 +1,7 @@
 // MongoDB Atlas を使ったデータ保存(Renderの再デプロイ・スリープでデータが消えないようにするため)
 // 環境変数 MONGODB_URI が設定されている時だけ使われる(db.js が自動で切り替える)
 const { MongoClient } = require('mongodb');
-const { MAX_MEMBER_VIDEOS } = require('./stats');
+const { MAX_MEMBER_MEDIA } = require('./stats');
 
 const uri = process.env.MONGODB_URI;
 let clientPromise = null;
@@ -39,6 +39,27 @@ async function ensureIndexes() {
   await db.collection('checkins').createIndex({ userId: 1, date: 1 });
   // expiresを過ぎたセッションをMongo側が自動で削除してくれる(TTLインデックス)
   await db.collection('sessions').createIndex({ expires: 1 }, { expireAfterSeconds: 0 });
+  await db.collection('media').createIndex({ memberId: 1 });
+  await migrateLegacyVideos(db);
+}
+
+// 旧形式(会員ごとにvideos配列を埋め込んでいた)から、独立したmediaコレクションへの移行(初回のみ、以後は空振りするだけ)
+async function migrateLegacyVideos(db) {
+  const usersWithVideos = await db.collection('users').find({ videos: { $exists: true, $ne: [] } }).toArray();
+  for (const u of usersWithVideos) {
+    for (const v of u.videos || []) {
+      const id = await nextSeq('media');
+      await db.collection('media').insertOne({
+        _id: id,
+        memberId: u._id,
+        type: 'video',
+        title: v.title,
+        url: v.url,
+        createdAt: v.createdAt,
+      });
+    }
+    await db.collection('users').updateOne({ _id: u._id }, { $unset: { videos: '' } });
+  }
 }
 
 // --- ログインセッション(Renderがスリープ・再起動してもログイン状態を保つためDBに保存する) ---
@@ -86,13 +107,13 @@ function mapUser(doc) {
     passwordHash: doc.passwordHash,
     role: doc.role,
     rewardsGiven: doc.rewardsGiven || 0,
-    videos: doc.videos || [],
+    trainingMenu: doc.trainingMenu || null,
   };
 }
 
 function mapCheckin(doc) {
   if (!doc) return undefined;
-  return { id: doc._id, userId: doc.userId, date: doc.date };
+  return { id: doc._id, userId: doc.userId, date: doc.date, note: doc.note || '' };
 }
 
 // --- users ---
@@ -134,24 +155,57 @@ async function updateUserPassword(id, passwordHash) {
   return getUserById(id);
 }
 
-// 会員ごとの動画(タイトル+URL、最大MAX_MEMBER_VIDEOS本)
-async function addMemberVideo(id, { title, url, createdAt }) {
+// 管理者が指定するトレーニングメニュー(セット数・回数の目標)。常に最新の内容で上書きする
+async function updateTrainingMenu(id, { text, updatedAt }) {
   const db = await getDb();
-  const user = await db.collection('users').findOne({ _id: Number(id) });
-  if (!user) throw new Error('会員が見つかりません');
-  const existing = user.videos || [];
-  if (existing.length >= MAX_MEMBER_VIDEOS) {
-    throw new Error(`動画は最大${MAX_MEMBER_VIDEOS}本までです`);
-  }
-  const videoId = await nextSeq('videos');
-  const video = { id: videoId, title, url, createdAt };
-  await db.collection('users').updateOne({ _id: Number(id) }, { $push: { videos: video } });
-  return video;
+  const result = await db.collection('users').updateOne({ _id: Number(id) }, { $set: { trainingMenu: { text, updatedAt } } });
+  if (result.matchedCount === 0) throw new Error('会員が見つかりません');
+  return { text, updatedAt };
 }
 
-async function removeMemberVideo(id, videoId) {
+// 会員ごとの動画・画像(合わせて最大MAX_MEMBER_MEDIA件、独立したコレクションとして保存する)
+function mapMedia(doc) {
+  if (!doc) return undefined;
+  return {
+    id: doc._id,
+    memberId: doc.memberId,
+    type: doc.type,
+    title: doc.title,
+    url: doc.url,
+    imageData: doc.imageData,
+    mimeType: doc.mimeType,
+    note: doc.note || '',
+    createdAt: doc.createdAt,
+  };
+}
+
+async function getMediaForMember(memberId) {
   const db = await getDb();
-  await db.collection('users').updateOne({ _id: Number(id) }, { $pull: { videos: { id: Number(videoId) } } });
+  const docs = await db
+    .collection('media')
+    .find({ memberId: Number(memberId) })
+    .sort({ _id: 1 })
+    .toArray();
+  return docs.map(mapMedia);
+}
+
+async function addMemberMedia(memberId, { type, title, url, imageData, mimeType, note, createdAt }) {
+  const db = await getDb();
+  const user = await db.collection('users').findOne({ _id: Number(memberId) });
+  if (!user) throw new Error('会員が見つかりません');
+  const existingCount = await db.collection('media').countDocuments({ memberId: Number(memberId) });
+  if (existingCount >= MAX_MEMBER_MEDIA) {
+    throw new Error(`動画・画像は合わせて最大${MAX_MEMBER_MEDIA}件までです`);
+  }
+  const id = await nextSeq('media');
+  const doc = { _id: id, memberId: Number(memberId), type, title, url, imageData, mimeType, note, createdAt };
+  await db.collection('media').insertOne(doc);
+  return mapMedia(doc);
+}
+
+async function removeMemberMedia(memberId, mediaId) {
+  const db = await getDb();
+  await db.collection('media').deleteOne({ _id: Number(mediaId), memberId: Number(memberId) });
 }
 
 async function deleteUser(id) {
@@ -188,6 +242,13 @@ async function addCheckin(userId, date) {
 async function removeCheckin(userId, date) {
   const db = await getDb();
   await db.collection('checkins').deleteOne({ userId: Number(userId), date });
+}
+
+// トレーニング内容のメモ(セット数・回数など)を後から追加・編集する。本人のチェックインのみ対象
+async function updateCheckinNote(userId, date, note) {
+  const db = await getDb();
+  const result = await db.collection('checkins').updateOne({ userId: Number(userId), date }, { $set: { note } });
+  if (result.matchedCount === 0) throw new Error('チェックインが見つかりません');
 }
 
 async function getAllCheckins() {
@@ -287,12 +348,13 @@ async function exportRaw() {
   const checkins = await db.collection('checkins').find({}).toArray();
   const messages = await db.collection('messages').find({}).toArray();
   const posts = await db.collection('posts').find({}).toArray();
+  const media = await db.collection('media').find({}).toArray();
   const usersCounter = await db.collection('counters').findOne({ _id: 'users' });
   const checkinsCounter = await db.collection('counters').findOne({ _id: 'checkins' });
   const messagesCounter = await db.collection('counters').findOne({ _id: 'messages' });
   const postsCounter = await db.collection('counters').findOne({ _id: 'posts' });
   const repliesCounter = await db.collection('counters').findOne({ _id: 'replies' });
-  const videosCounter = await db.collection('counters').findOne({ _id: 'videos' });
+  const mediaCounter = await db.collection('counters').findOne({ _id: 'media' });
   const data = {
     users: users.map((u) => ({
       id: u._id,
@@ -301,9 +363,9 @@ async function exportRaw() {
       passwordHash: u.passwordHash,
       role: u.role,
       rewardsGiven: u.rewardsGiven || 0,
-      videos: u.videos || [],
+      trainingMenu: u.trainingMenu || null,
     })),
-    checkins: checkins.map((c) => ({ id: c._id, userId: c.userId, date: c.date })),
+    checkins: checkins.map((c) => ({ id: c._id, userId: c.userId, date: c.date, note: c.note || '' })),
     messages: messages.map((m) => ({
       id: m._id,
       memberId: m.memberId,
@@ -320,12 +382,23 @@ async function exportRaw() {
       createdAt: p.createdAt,
       replies: p.replies || [],
     })),
+    media: media.map((m) => ({
+      id: m._id,
+      memberId: m.memberId,
+      type: m.type,
+      title: m.title,
+      url: m.url,
+      imageData: m.imageData,
+      mimeType: m.mimeType,
+      note: m.note || '',
+      createdAt: m.createdAt,
+    })),
     nextUserId: (usersCounter ? usersCounter.seq : 0) + 1,
     nextCheckinId: (checkinsCounter ? checkinsCounter.seq : 0) + 1,
     nextMessageId: (messagesCounter ? messagesCounter.seq : 0) + 1,
     nextPostId: (postsCounter ? postsCounter.seq : 0) + 1,
     nextReplyId: (repliesCounter ? repliesCounter.seq : 0) + 1,
-    nextVideoId: (videosCounter ? videosCounter.seq : 0) + 1,
+    nextMediaId: (mediaCounter ? mediaCounter.seq : 0) + 1,
   };
   return JSON.stringify(data, null, 2);
 }
@@ -337,11 +410,13 @@ async function importRaw(jsonStr) {
   }
   const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
   const posts = Array.isArray(parsed.posts) ? parsed.posts : [];
+  const media = Array.isArray(parsed.media) ? parsed.media : [];
   const db = await getDb();
   await db.collection('users').deleteMany({});
   await db.collection('checkins').deleteMany({});
   await db.collection('messages').deleteMany({});
   await db.collection('posts').deleteMany({});
+  await db.collection('media').deleteMany({});
   if (parsed.users.length) {
     await db.collection('users').insertMany(
       parsed.users.map((u) => ({
@@ -351,12 +426,34 @@ async function importRaw(jsonStr) {
         passwordHash: u.passwordHash,
         role: u.role,
         rewardsGiven: u.rewardsGiven || 0,
-        videos: u.videos || [],
+        trainingMenu: u.trainingMenu || null,
+        // 旧形式のバックアップ(会員に埋め込みのvideos配列)が来た場合はmediaコレクションへ変換して復元する
       }))
     );
   }
   if (parsed.checkins.length) {
-    await db.collection('checkins').insertMany(parsed.checkins.map((c) => ({ _id: c.id, userId: c.userId, date: c.date })));
+    await db.collection('checkins').insertMany(
+      parsed.checkins.map((c) => ({ _id: c.id, userId: c.userId, date: c.date, note: c.note || '' }))
+    );
+  }
+  const legacyMediaFromUsers = parsed.users.flatMap((u) =>
+    (u.videos || []).map((v) => ({ id: v.id, memberId: u.id, type: 'video', title: v.title, url: v.url, createdAt: v.createdAt }))
+  );
+  const allMedia = media.length ? media : legacyMediaFromUsers;
+  if (allMedia.length) {
+    await db.collection('media').insertMany(
+      allMedia.map((m) => ({
+        _id: m.id,
+        memberId: m.memberId,
+        type: m.type || 'video',
+        title: m.title,
+        url: m.url,
+        imageData: m.imageData,
+        mimeType: m.mimeType,
+        note: m.note || '',
+        createdAt: m.createdAt,
+      }))
+    );
   }
   if (messages.length) {
     await db.collection('messages').insertMany(
@@ -387,13 +484,13 @@ async function importRaw(jsonStr) {
   const maxMessageId = messages.reduce((m, x) => Math.max(m, x.id), 0);
   const maxPostId = posts.reduce((m, x) => Math.max(m, x.id), 0);
   const maxReplyId = posts.flatMap((p) => (p.replies || []).map((r) => r.id)).reduce((m, id) => Math.max(m, id), 0);
-  const maxVideoId = parsed.users.flatMap((u) => (u.videos || []).map((v) => v.id)).reduce((m, id) => Math.max(m, id), 0);
+  const maxMediaId = allMedia.reduce((m, x) => Math.max(m, x.id), 0);
   await db.collection('counters').updateOne({ _id: 'users' }, { $set: { seq: maxUserId } }, { upsert: true });
   await db.collection('counters').updateOne({ _id: 'checkins' }, { $set: { seq: maxCheckinId } }, { upsert: true });
   await db.collection('counters').updateOne({ _id: 'messages' }, { $set: { seq: maxMessageId } }, { upsert: true });
   await db.collection('counters').updateOne({ _id: 'posts' }, { $set: { seq: maxPostId } }, { upsert: true });
   await db.collection('counters').updateOne({ _id: 'replies' }, { $set: { seq: maxReplyId } }, { upsert: true });
-  await db.collection('counters').updateOne({ _id: 'videos' }, { $set: { seq: maxVideoId } }, { upsert: true });
+  await db.collection('counters').updateOne({ _id: 'media' }, { $set: { seq: maxMediaId } }, { upsert: true });
 }
 
 module.exports = {
@@ -407,15 +504,18 @@ module.exports = {
   getAllMembers,
   createUser,
   updateUserPassword,
+  updateTrainingMenu,
   deleteUser,
   getCheckinsForUser,
   hasCheckinForDate,
   addCheckin,
   removeCheckin,
+  updateCheckinNote,
   getAllCheckins,
   incrementRewardsGiven,
-  addMemberVideo,
-  removeMemberVideo,
+  getMediaForMember,
+  addMemberMedia,
+  removeMemberMedia,
   getMessagesForMember,
   addMessage,
   deleteMessage,
