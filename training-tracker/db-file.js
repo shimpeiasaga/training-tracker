@@ -2,7 +2,7 @@
 // 自分のPCで動かす場合はこちらが使われる(MONGODB_URIが無い時のデフォルト)
 const fs = require('fs');
 const path = require('path');
-const { MAX_MEMBER_VIDEOS } = require('./stats');
+const { MAX_MEMBER_MEDIA } = require('./stats');
 
 const DATA_DIR = path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'data.json');
@@ -19,12 +19,13 @@ function ensureDataFile() {
           messages: [],
           posts: [],
           sessions: [],
+          media: [],
           nextUserId: 1,
           nextCheckinId: 1,
           nextMessageId: 1,
           nextPostId: 1,
           nextReplyId: 1,
-          nextVideoId: 1,
+          nextMediaId: 1,
         },
         null,
         2
@@ -40,10 +41,32 @@ function load() {
   if (!Array.isArray(data.messages)) data.messages = [];
   if (!Array.isArray(data.posts)) data.posts = [];
   if (!Array.isArray(data.sessions)) data.sessions = [];
+  if (!Array.isArray(data.media)) data.media = [];
   if (typeof data.nextMessageId !== 'number') data.nextMessageId = 1;
   if (typeof data.nextPostId !== 'number') data.nextPostId = 1;
   if (typeof data.nextReplyId !== 'number') data.nextReplyId = 1;
-  if (typeof data.nextVideoId !== 'number') data.nextVideoId = 1;
+  if (typeof data.nextMediaId !== 'number') {
+    data.nextMediaId = data.media.reduce((max, m) => Math.max(max, m.id + 1), 1);
+  }
+  // 旧形式(会員ごとにvideos配列を埋め込んでいた)から、独立したmedia一覧への移行(初回のみ)
+  let migrated = false;
+  data.users.forEach((u) => {
+    if (Array.isArray(u.videos) && u.videos.length) {
+      u.videos.forEach((v) => {
+        data.media.push({
+          id: data.nextMediaId++,
+          memberId: u.id,
+          type: 'video',
+          title: v.title,
+          url: v.url,
+          createdAt: v.createdAt,
+        });
+      });
+      migrated = true;
+    }
+    if (Array.isArray(u.videos)) delete u.videos;
+  });
+  if (migrated) save(data);
   return data;
 }
 
@@ -98,6 +121,16 @@ function createUser({ name, username, passwordHash, role }) {
   return user;
 }
 
+// 管理者が指定するトレーニングメニュー(セット数・回数の目標)。常に最新の内容で上書きする
+function updateTrainingMenu(id, { text, updatedAt }) {
+  const data = load();
+  const user = data.users.find((u) => u.id === Number(id));
+  if (!user) throw new Error('会員が見つかりません');
+  user.trainingMenu = { text, updatedAt };
+  save(data);
+  return user.trainingMenu;
+}
+
 // 特典を1回渡した記録を追加する
 function incrementRewardsGiven(id) {
   const data = load();
@@ -119,28 +152,31 @@ function updateUserPassword(id, passwordHash) {
   return user;
 }
 
-// 会員ごとの動画(タイトル+URL、最大MAX_MEMBER_VIDEOS本)
-function addMemberVideo(id, { title, url, createdAt }) {
-  const data = load();
-  const user = data.users.find((u) => u.id === Number(id));
-  if (!user) throw new Error('会員が見つかりません');
-  if (!Array.isArray(user.videos)) user.videos = [];
-  if (user.videos.length >= MAX_MEMBER_VIDEOS) {
-    throw new Error(`動画は最大${MAX_MEMBER_VIDEOS}本までです`);
-  }
-  const video = { id: data.nextVideoId++, title, url, createdAt };
-  user.videos.push(video);
-  save(data);
-  return video;
+// 会員ごとの動画・画像(合わせて最大MAX_MEMBER_MEDIA件、独立した一覧として保存する)
+function getMediaForMember(memberId) {
+  return load()
+    .media.filter((m) => m.memberId === Number(memberId))
+    .sort((a, b) => a.id - b.id);
 }
 
-function removeMemberVideo(id, videoId) {
+function addMemberMedia(memberId, { type, title, url, imageData, mimeType, note, createdAt }) {
   const data = load();
-  const user = data.users.find((u) => u.id === Number(id));
-  if (user && Array.isArray(user.videos)) {
-    user.videos = user.videos.filter((v) => v.id !== Number(videoId));
-    save(data);
+  const user = data.users.find((u) => u.id === Number(memberId));
+  if (!user) throw new Error('会員が見つかりません');
+  const existing = data.media.filter((m) => m.memberId === Number(memberId));
+  if (existing.length >= MAX_MEMBER_MEDIA) {
+    throw new Error(`動画・画像は合わせて最大${MAX_MEMBER_MEDIA}件までです`);
   }
+  const item = { id: data.nextMediaId++, memberId: Number(memberId), type, title, url, imageData, mimeType, note, createdAt };
+  data.media.push(item);
+  save(data);
+  return item;
+}
+
+function removeMemberMedia(memberId, mediaId) {
+  const data = load();
+  data.media = data.media.filter((m) => !(m.id === Number(mediaId) && m.memberId === Number(memberId)));
+  save(data);
 }
 
 function deleteUser(id) {
@@ -172,6 +208,16 @@ function removeCheckin(userId, date) {
   const data = load();
   data.checkins = data.checkins.filter(c => !(c.userId === Number(userId) && c.date === date));
   save(data);
+}
+
+// トレーニング内容のメモ(セット数・回数など)を後から追加・編集する。本人のチェックインのみ対象
+function updateCheckinNote(userId, date, note) {
+  const data = load();
+  const c = data.checkins.find((c) => c.userId === Number(userId) && c.date === date);
+  if (!c) throw new Error('チェックインが見つかりません');
+  c.note = note;
+  save(data);
+  return c;
 }
 
 function getAllCheckins() {
@@ -274,9 +320,9 @@ function importRaw(jsonStr) {
     const allReplyIds = parsed.posts.flatMap((p) => (p.replies || []).map((r) => r.id));
     parsed.nextReplyId = allReplyIds.length ? Math.max(...allReplyIds) + 1 : 1;
   }
-  if (typeof parsed.nextVideoId !== 'number') {
-    const allVideoIds = parsed.users.flatMap((u) => (u.videos || []).map((v) => v.id));
-    parsed.nextVideoId = allVideoIds.length ? Math.max(...allVideoIds) + 1 : 1;
+  if (!Array.isArray(parsed.media)) parsed.media = [];
+  if (typeof parsed.nextMediaId !== 'number') {
+    parsed.nextMediaId = parsed.media.reduce((max, m) => Math.max(max, m.id + 1), 1);
   }
   save(parsed);
 }
@@ -291,15 +337,18 @@ module.exports = {
   getAllMembers,
   createUser,
   updateUserPassword,
+  updateTrainingMenu,
   deleteUser,
   getCheckinsForUser,
   hasCheckinForDate,
   addCheckin,
   removeCheckin,
+  updateCheckinNote,
   getAllCheckins,
   incrementRewardsGiven,
-  addMemberVideo,
-  removeMemberVideo,
+  getMediaForMember,
+  addMemberMedia,
+  removeMemberMedia,
   getMessagesForMember,
   addMessage,
   deleteMessage,
