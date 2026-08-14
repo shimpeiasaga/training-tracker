@@ -490,6 +490,18 @@ const server = http.createServer(async (req, res) => {
       return redirect(res, `/admin/member/${match[1]}#video`);
     }
 
+    match = pathname.match(/^\/admin\/members\/(\d+)\/media\/(\d+)\/note$/);
+    if (match && method === 'POST') {
+      const body = await parseBody(req);
+      const note = (body.note || '').trim();
+      try {
+        await db.updateMemberMediaNote(match[1], match[2], note);
+      } catch (err) {
+        // 対象が見つからない場合などは何もせず戻る
+      }
+      return redirect(res, `/admin/member/${match[1]}#video`);
+    }
+
     if (pathname === '/admin/backup' && method === 'GET') {
       const raw = await db.exportRaw();
       const filename = `training-tracker-backup-${stats.todayStr()}.json`;
