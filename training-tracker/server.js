@@ -135,7 +135,8 @@ const server = http.createServer(async (req, res) => {
   // --- 会員ページ ---
   if (pathname === '/member' && method === 'GET') {
     const fullUser = await db.getUserById(user.id);
-    const checkins = (await db.getCheckinsForUser(user.id)).map((c) => c.date);
+    const checkinRecords = await db.getCheckinsForUser(user.id);
+    const checkins = checkinRecords.map((c) => c.date);
     const today = stats.todayStr();
     const streak = stats.currentStreak(checkins);
     const totalDays = checkins.length; // バッジは連続日数ではなく累計実施日数で判定する
@@ -171,9 +172,11 @@ const server = http.createServer(async (req, res) => {
         milestoneBadge: celebrate ? stats.justUnlockedBadge(totalDays) : null,
         rewardCelebrate,
         checkinDates: checkins,
+        checkinRecords,
         badgeLog: stats.badgeUnlockLog(checkins),
         messages: await db.getMessagesForMember(user.id),
-        videos: fullUser.videos || [],
+        media: await db.getMediaForMember(user.id),
+        trainingMenu: fullUser.trainingMenu || null,
       })
     );
   }
@@ -276,6 +279,18 @@ const server = http.createServer(async (req, res) => {
     return redirect(res, `/member?celebrate=1${justEarnedReward ? '&reward=1' : ''}`);
   }
 
+  let checkinNoteMatch = pathname.match(/^\/member\/checkins\/(\d{4}-\d{2}-\d{2})\/note$/);
+  if (checkinNoteMatch && method === 'POST') {
+    const body = await parseBody(req);
+    const note = (body.note || '').trim().slice(0, 300);
+    try {
+      await db.updateCheckinNote(user.id, checkinNoteMatch[1], note);
+    } catch (err) {
+      // チェックインが存在しない日付を指定された場合などは何もせず戻る
+    }
+    return redirect(res, '/member#history');
+  }
+
   if (pathname === '/member/password' && method === 'POST') {
     const body = await parseBody(req);
     if (body.newPassword && body.newPassword.length >= 4) {
@@ -374,6 +389,14 @@ const server = http.createServer(async (req, res) => {
       return redirect(res, '/admin?error=' + encodeURIComponent('パスワードは4文字以上にしてください'));
     }
 
+    match = pathname.match(/^\/admin\/members\/(\d+)\/training-menu$/);
+    if (match && method === 'POST') {
+      const body = await parseBody(req);
+      const text = (body.text || '').trim();
+      await db.updateTrainingMenu(match[1], { text, updatedAt: stats.nowStr() });
+      return redirect(res, `/admin/member/${match[1]}#menu`);
+    }
+
     match = pathname.match(/^\/admin\/members\/(\d+)\/reward$/);
     if (match && method === 'POST') {
       await db.incrementRewardsGiven(match[1]);
@@ -407,14 +430,15 @@ const server = http.createServer(async (req, res) => {
       return redirect(res, `/admin/member/${match[1]}#messages`);
     }
 
-    match = pathname.match(/^\/admin\/members\/(\d+)\/videos$/);
+    match = pathname.match(/^\/admin\/members\/(\d+)\/media\/video$/);
     if (match && method === 'POST') {
       const body = await parseBody(req);
       const title = (body.title || '').trim();
       const videoUrl = (body.url || '').trim();
+      const note = (body.note || '').trim();
       if (title && videoUrl) {
         try {
-          await db.addMemberVideo(match[1], { title, url: videoUrl, createdAt: stats.nowStr() });
+          await db.addMemberMedia(match[1], { type: 'video', title, url: videoUrl, note, createdAt: stats.nowStr() });
         } catch (err) {
           return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message)}#video`);
         }
@@ -422,9 +446,44 @@ const server = http.createServer(async (req, res) => {
       return redirect(res, `/admin/member/${match[1]}#video`);
     }
 
-    match = pathname.match(/^\/admin\/members\/(\d+)\/videos\/(\d+)\/delete$/);
+    match = pathname.match(/^\/admin\/members\/(\d+)\/media\/image$/);
     if (match && method === 'POST') {
-      await db.removeMemberVideo(match[1], match[2]);
+      const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
+      const ALLOWED_TYPES = { 'image/jpeg': true, 'image/png': true, 'image/webp': true, 'image/gif': true };
+      const EXT_TYPE = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif' };
+      try {
+        const { fields, files } = await parseMultipart(req);
+        const title = (fields.title || '').trim();
+        const note = (fields.note || '').trim();
+        const file = files.image;
+        if (!title || !file || !file.content || !file.content.length) {
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('タイトルと画像ファイルを指定してください')}#video`);
+        }
+        if (file.content.length > MAX_IMAGE_BYTES) {
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('画像は5MBまでです')}#video`);
+        }
+        const ext = (file.filename.split('.').pop() || '').toLowerCase();
+        const mimeType = ALLOWED_TYPES[file.contentType] ? file.contentType : EXT_TYPE[ext];
+        if (!mimeType) {
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('対応していない画像形式です(jpg/png/webp/gifのみ)')}#video`);
+        }
+        await db.addMemberMedia(match[1], {
+          type: 'image',
+          title,
+          imageData: file.content.toString('base64'),
+          mimeType,
+          note,
+          createdAt: stats.nowStr(),
+        });
+      } catch (err) {
+        return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message || '画像の登録に失敗しました')}#video`);
+      }
+      return redirect(res, `/admin/member/${match[1]}#video`);
+    }
+
+    match = pathname.match(/^\/admin\/members\/(\d+)\/media\/(\d+)\/delete$/);
+    if (match && method === 'POST') {
+      await db.removeMemberMedia(match[1], match[2]);
       return redirect(res, `/admin/member/${match[1]}#video`);
     }
 
@@ -459,7 +518,8 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(404);
         return res.end('会員が見つかりません');
       }
-      const checkins = (await db.getCheckinsForUser(member.id)).map((c) => c.date);
+      const checkinRecords = await db.getCheckinsForUser(member.id);
+      const checkins = checkinRecords.map((c) => c.date);
       const memberStreak = stats.currentStreak(checkins);
       const monthlyStreak = stats.currentMonthlyStreak(checkins);
       const earned = stats.rewardsEarned(monthlyStreak);
@@ -488,9 +548,10 @@ const server = http.createServer(async (req, res) => {
           rewardsPending: Math.max(0, earned - given),
           badges: stats.streakBadges(checkins.length),
           checkinDates: checkins,
+          checkinRecords,
           badgeLog: stats.badgeUnlockLog(checkins),
           messages: await db.getMessagesForMember(member.id),
-          videos: member.videos || [],
+          media: await db.getMediaForMember(member.id),
           videoError: url.searchParams.get('error'),
         })
       );
