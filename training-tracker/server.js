@@ -134,7 +134,6 @@ const server = http.createServer(async (req, res) => {
 
   // --- 会員ページ ---
   if (pathname === '/member' && method === 'GET') {
-    const fullUser = await db.getUserById(user.id);
     const checkinRecords = await db.getCheckinsForUser(user.id);
     const checkins = checkinRecords.map((c) => c.date);
     const today = stats.todayStr();
@@ -176,7 +175,6 @@ const server = http.createServer(async (req, res) => {
         badgeLog: stats.badgeUnlockLog(checkins),
         messages: await db.getMessagesForMember(user.id),
         media: await db.getMediaForMember(user.id),
-        trainingMenu: fullUser.trainingMenu || null,
       })
     );
   }
@@ -291,12 +289,25 @@ const server = http.createServer(async (req, res) => {
     return redirect(res, '/member#history');
   }
 
+  if (pathname === '/member/password' && method === 'GET') {
+    return sendHtml(
+      res,
+      200,
+      views.memberPasswordPage({
+        userName: user.name,
+        error: url.searchParams.get('error'),
+        message: url.searchParams.get('message'),
+      })
+    );
+  }
+
   if (pathname === '/member/password' && method === 'POST') {
     const body = await parseBody(req);
     if (body.newPassword && body.newPassword.length >= 4) {
       await db.updateUserPassword(user.id, crypto.hashPassword(body.newPassword));
+      return redirect(res, '/member/password?message=' + encodeURIComponent('パスワードを変更しました'));
     }
-    return redirect(res, '/member');
+    return redirect(res, '/member/password?error=' + encodeURIComponent('パスワードは4文字以上にしてください'));
   }
 
   // --- 管理者ページ ---
@@ -387,14 +398,6 @@ const server = http.createServer(async (req, res) => {
         return redirect(res, '/admin?message=' + encodeURIComponent('パスワードを再設定しました'));
       }
       return redirect(res, '/admin?error=' + encodeURIComponent('パスワードは4文字以上にしてください'));
-    }
-
-    match = pathname.match(/^\/admin\/members\/(\d+)\/training-menu$/);
-    if (match && method === 'POST') {
-      const body = await parseBody(req);
-      const text = (body.text || '').trim();
-      await db.updateTrainingMenu(match[1], { text, updatedAt: stats.nowStr() });
-      return redirect(res, `/admin/member/${match[1]}#menu`);
     }
 
     match = pathname.match(/^\/admin\/members\/(\d+)\/reward$/);
