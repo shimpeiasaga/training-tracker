@@ -199,6 +199,16 @@ async function removeMemberMedia(memberId, mediaId) {
   await db.collection('media').deleteOne({ _id: Number(mediaId), memberId: Number(memberId) });
 }
 
+// 動画・画像のセット数・回数メモを後から編集する(管理者のみ)
+async function updateMemberMediaNote(memberId, mediaId, note) {
+  const db = await getDb();
+  const result = await db.collection('media').updateOne(
+    { _id: Number(mediaId), memberId: Number(memberId) },
+    { $set: { note } }
+  );
+  if (result.matchedCount === 0) throw new Error('動画・画像が見つかりません');
+}
+
 async function deleteUser(id) {
   const db = await getDb();
   await db.collection('users').deleteOne({ _id: Number(id) });
@@ -504,6 +514,7 @@ module.exports = {
   getMediaForMember,
   addMemberMedia,
   removeMemberMedia,
+  updateMemberMediaNote,
   getMessagesForMember,
   addMessage,
   deleteMessage,
