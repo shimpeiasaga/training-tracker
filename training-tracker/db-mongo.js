@@ -261,7 +261,7 @@ async function getAllCheckins() {
 // --- 管理者⇔会員の個別メッセージ ---
 function mapMessage(doc) {
   if (!doc) return undefined;
-  return { id: doc._id, memberId: doc.memberId, senderRole: doc.senderRole, senderName: doc.senderName, body: doc.body, createdAt: doc.createdAt };
+  return { id: doc._id, memberId: doc.memberId, senderRole: doc.senderRole, senderName: doc.senderName, body: doc.body, createdAt: doc.createdAt, read: doc.read !== false };
 }
 
 async function getMessagesForMember(memberId) {
@@ -277,9 +277,40 @@ async function getMessagesForMember(memberId) {
 async function addMessage({ memberId, senderRole, senderName, body, createdAt }) {
   const db = await getDb();
   const id = await nextSeq('messages');
-  const doc = { _id: id, memberId: Number(memberId), senderRole, senderName, body, createdAt };
+  const doc = { _id: id, memberId: Number(memberId), senderRole, senderName, body, createdAt, read: false };
   await db.collection('messages').insertOne(doc);
   return mapMessage(doc);
+}
+
+// readerRoleから見て「相手」が送った未読メッセージがあるか
+async function hasUnreadMessages(memberId, readerRole) {
+  const db = await getDb();
+  const otherRole = readerRole === 'admin' ? 'member' : 'admin';
+  const count = await db.collection('messages').countDocuments({
+    memberId: Number(memberId),
+    senderRole: otherRole,
+    read: false,
+  });
+  return count > 0;
+}
+
+// readerRoleから見て「相手」が送った未読メッセージを全て既読にする
+async function markMessagesRead(memberId, readerRole) {
+  const db = await getDb();
+  const otherRole = readerRole === 'admin' ? 'member' : 'admin';
+  await db.collection('messages').updateMany(
+    { memberId: Number(memberId), senderRole: otherRole, read: false },
+    { $set: { read: true } }
+  );
+}
+
+// 管理者ダッシュボード用: 未読(会員発信)メッセージがある会員の一覧
+async function getMembersWithUnreadMessages() {
+  const db = await getDb();
+  const memberIds = await db.collection('messages').distinct('memberId', { senderRole: 'member', read: false });
+  if (!memberIds.length) return [];
+  const docs = await db.collection('users').find({ _id: { $in: memberIds } }).toArray();
+  return docs.map((u) => ({ id: u._id, name: u.name }));
 }
 
 // 送った本人だけが自分のメッセージを削除できる
@@ -373,6 +404,7 @@ async function exportRaw() {
       senderName: m.senderName,
       body: m.body,
       createdAt: m.createdAt,
+      read: m.read !== false,
     })),
     posts: posts.map((p) => ({
       id: p._id,
@@ -463,6 +495,7 @@ async function importRaw(jsonStr) {
         senderName: m.senderName,
         body: m.body,
         createdAt: m.createdAt,
+        read: m.read !== false,
       }))
     );
   }
@@ -516,6 +549,9 @@ module.exports = {
   removeMemberMedia,
   updateMemberMediaNote,
   getMessagesForMember,
+  hasUnreadMessages,
+  markMessagesRead,
+  getMembersWithUnreadMessages,
   addMessage,
   deleteMessage,
   getBoardPosts,
