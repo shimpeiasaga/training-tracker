@@ -83,6 +83,12 @@ function layout({ title, body, script = '', topbar = '' }) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)}</title>
 <link rel="stylesheet" href="/style.css">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#2563eb">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="オンライン運動元気倶楽部">
 ${script ? `<script src="${CHART_JS}"></script>` : ''}
 </head>
 <body>
@@ -369,6 +375,7 @@ function memberPage({
   badgeLog,
   messages,
   media,
+  hasUnreadMessages,
 }) {
   const script = `
     ${celebrate ? confettiScript(rewardCelebrate) : ''}`;
@@ -385,11 +392,16 @@ function memberPage({
       </div>`
     : '';
 
+  const unreadBanner = hasUnreadMessages
+    ? `<a href="#messages" class="notice-banner">📩 アドバイザーから新着メッセージがあります</a>`
+    : '';
+
   return layout({
     title: 'マイページ | オンライン運動元気倶楽部',
     topbar: topbar(`${escapeHtml(userName)} さん`, true, true),
     script,
     body: `
+    ${unreadBanner}
     ${celebrateBanner}
 
     <div class="card" id="video">
@@ -483,7 +495,7 @@ function memberPasswordPage({ userName, error, message }) {
   });
 }
 
-function adminPage({ members, teamWeekly, ranked, error, message }) {
+function adminPage({ members, teamWeekly, ranked, error, message, unreadMembers = [] }) {
   const rows = members
     .map(
       (m) => `
@@ -530,6 +542,13 @@ function adminPage({ members, teamWeekly, ranked, error, message }) {
     topbar: topbar('管理者ダッシュボード'),
     script,
     body: `
+    ${
+      unreadMembers.length
+        ? `<a href="/admin/member/${unreadMembers[0].id}#messages" class="notice-banner">📩 新着メッセージ: ${unreadMembers
+            .map((m) => escapeHtml(m.name))
+            .join('、')}さん</a>`
+        : ''
+    }
     ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
     ${message ? `<div class="message">${escapeHtml(message)}</div>` : ''}
 
@@ -583,7 +602,7 @@ function adminPage({ members, teamWeekly, ranked, error, message }) {
   });
 }
 
-function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGrid, prevMonthKey, nextMonthKey, calendarBasePath, weekly, monthCount, monthlyStreak, monthlySeries, rewardsEarned, rewardsGiven, rewardsPending, badges, checkinDates, checkinRecords, badgeLog, messages, media, videoError }) {
+function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGrid, prevMonthKey, nextMonthKey, calendarBasePath, weekly, monthCount, monthlyStreak, monthlySeries, rewardsEarned, rewardsGiven, rewardsPending, badges, checkinDates, checkinRecords, badgeLog, messages, media, videoError, hadUnreadMessages }) {
   const script = `
     const monthlySeries = ${JSON.stringify(monthlySeries)};
     new Chart(document.getElementById('monthlyChart'), {
@@ -604,6 +623,7 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
     topbar: `<div class="topbar"><span class="brand"><a href="/admin">&larr; 管理者ダッシュボード</a></span><div class="topbar-actions"><a href="/board">💬 みんなの掲示板</a><form method="POST" action="/logout"><button type="submit">ログアウト</button></form></div></div>`,
     script,
     body: `
+    ${hadUnreadMessages ? `<a href="#messages" class="notice-banner">📩 ${escapeHtml(member.name)}さんから新着メッセージがあります</a>` : ''}
     <div class="card">
       <h2>${escapeHtml(member.name)} さんの進捗</h2>
       <div class="stat-row">
