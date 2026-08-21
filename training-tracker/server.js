@@ -15,7 +15,8 @@ const views = require('./views');
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
-const MIME = { '.css': 'text/css', '.js': 'application/javascript' };
+const MIME = { '.css': 'text/css', '.js': 'application/javascript', '.json': 'application/json', '.png': 'image/png' };
+const STATIC_PATHS = new Set(['/style.css', '/manifest.json', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png']);
 
 // 初回起動時に管理者アカウントがなければ自動で作る
 // (Renderなどshellが使えないホスティング環境でも、npm run seedを手動実行しなくて済むように)
@@ -94,7 +95,7 @@ const server = http.createServer(async (req, res) => {
   const method = req.method;
 
   // 静的ファイル
-  if (method === 'GET' && (pathname === '/style.css')) {
+  if (method === 'GET' && STATIC_PATHS.has(pathname)) {
     return serveStatic(req, res, pathname);
   }
 
@@ -143,10 +144,14 @@ const server = http.createServer(async (req, res) => {
     const rewardCelebrate = celebrate && url.searchParams.get('reward') === '1';
     const viewMonth = resolveViewMonth(url);
     const currentMonth = stats.monthKey(today);
+    const hasUnreadMessages = await db.hasUnreadMessages(user.id, 'member');
+    const memberMessages = await db.getMessagesForMember(user.id);
+    if (hasUnreadMessages) await db.markMessagesRead(user.id, 'member');
     return sendHtml(
       res,
       200,
       views.memberPage({
+        hasUnreadMessages,
         userName: user.name,
         today,
         checkedToday: checkins.includes(today),
@@ -173,7 +178,7 @@ const server = http.createServer(async (req, res) => {
         checkinDates: checkins,
         checkinRecords,
         badgeLog: stats.badgeUnlockLog(checkins),
-        messages: await db.getMessagesForMember(user.id),
+        messages: memberMessages,
         media: await db.getMediaForMember(user.id),
       })
     );
@@ -359,6 +364,7 @@ const server = http.createServer(async (req, res) => {
         views.adminPage({
           members,
           teamWeekly,
+          unreadMembers: await db.getMembersWithUnreadMessages(),
           ranked: await computeMonthlyRanking(),
           error: url.searchParams.get('error'),
           message: url.searchParams.get('message'),
@@ -541,11 +547,15 @@ const server = http.createServer(async (req, res) => {
       const given = member.rewardsGiven || 0;
       const viewMonth = resolveViewMonth(url);
       const currentMonth = stats.monthKey(stats.todayStr());
+      const hadUnreadMessages = await db.hasUnreadMessages(member.id, 'admin');
+      const adminViewMessages = await db.getMessagesForMember(member.id);
+      if (hadUnreadMessages) await db.markMessagesRead(member.id, 'admin');
       return sendHtml(
         res,
         200,
         views.adminMemberPage({
           member,
+          hadUnreadMessages,
           streak: memberStreak,
           weekCount: stats.thisWeekCount(checkins),
           total: checkins.length,
@@ -565,7 +575,7 @@ const server = http.createServer(async (req, res) => {
           checkinDates: checkins,
           checkinRecords,
           badgeLog: stats.badgeUnlockLog(checkins),
-          messages: await db.getMessagesForMember(member.id),
+          messages: adminViewMessages,
           media: await db.getMediaForMember(member.id),
           videoError: url.searchParams.get('error'),
         })
