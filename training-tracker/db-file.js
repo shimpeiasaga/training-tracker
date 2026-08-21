@@ -231,9 +231,40 @@ function getMessagesForMember(memberId) {
     .sort((a, b) => a.id - b.id);
 }
 
+// readerRoleから見て「相手」が送った未読メッセージがあるか(会員ページ・管理者の会員詳細ページの通知に使う)
+function hasUnreadMessages(memberId, readerRole) {
+  const otherRole = readerRole === 'admin' ? 'member' : 'admin';
+  return load().messages.some(
+    (m) => m.memberId === Number(memberId) && m.senderRole === otherRole && m.read === false
+  );
+}
+
+// readerRoleから見て「相手」が送った未読メッセージを全て既読にする(会員ページ・管理者の会員詳細ページを開いた時に呼ぶ)
+function markMessagesRead(memberId, readerRole) {
+  const otherRole = readerRole === 'admin' ? 'member' : 'admin';
+  const data = load();
+  let changed = false;
+  data.messages.forEach((m) => {
+    if (m.memberId === Number(memberId) && m.senderRole === otherRole && m.read === false) {
+      m.read = true;
+      changed = true;
+    }
+  });
+  if (changed) save(data);
+}
+
+// 管理者ダッシュボード用: 未読(会員発信)メッセージがある会員の一覧
+function getMembersWithUnreadMessages() {
+  const data = load();
+  const memberIds = new Set(
+    data.messages.filter((m) => m.senderRole === 'member' && m.read === false).map((m) => m.memberId)
+  );
+  return data.users.filter((u) => memberIds.has(u.id)).map((u) => ({ id: u.id, name: u.name }));
+}
+
 function addMessage({ memberId, senderRole, senderName, body, createdAt }) {
   const data = load();
-  const message = { id: data.nextMessageId++, memberId: Number(memberId), senderRole, senderName, body, createdAt };
+  const message = { id: data.nextMessageId++, memberId: Number(memberId), senderRole, senderName, body, createdAt, read: false };
   data.messages.push(message);
   save(data);
   return message;
@@ -350,6 +381,9 @@ module.exports = {
   removeMemberMedia,
   updateMemberMediaNote,
   getMessagesForMember,
+  hasUnreadMessages,
+  markMessagesRead,
+  getMembersWithUnreadMessages,
   addMessage,
   deleteMessage,
   getBoardPosts,
