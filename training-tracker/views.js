@@ -528,7 +528,7 @@ function memberPage({
     </div>
 
     <div class="card">
-      <h3>今月の目標(月${monthGoal}回)</h3>
+      <h3>今月の目標🏋️(月${monthGoal}回)</h3>
       ${monthlyProgressHtml({ monthCount, monthGoal, monthlyStreak, rewardMonths })}
     </div>
 
