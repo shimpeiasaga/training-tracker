@@ -514,6 +514,11 @@ function memberPage({
     </div>
 
     <div class="card">
+      <h3>🎖 ランクアップ履歴</h3>
+      ${badgeLogHtml(badgeLog)}
+    </div>
+
+    <div class="card">
       <h2>今日のトレーニング (${today})</h2>
       <form method="POST" action="/member/checkin">
         <button class="checkin-btn ${checkedToday ? 'checked' : ''}" type="submit">
@@ -528,7 +533,7 @@ function memberPage({
     </div>
 
     <div class="card">
-      <h3>メニュー更新</h3>
+      <h3>メニュー更新特典🎁</h3>
       ${menuUpdateCardHtml({ monthlyStreak, rewardMonths })}
     </div>
 
@@ -548,16 +553,6 @@ function memberPage({
       ${historyListHtml(checkinRecords, { editable: true })}
     </div>
 
-    <div class="card">
-      <h3>🎖 ランクアップ履歴</h3>
-      ${badgeLogHtml(badgeLog)}
-    </div>
-
-    <div class="card">
-      <h3>🏆 今月のランキング(上位3名掲載)</h3>
-      ${leaderboardHtml(ranked, userId)}
-    </div>
-
     <div class="card" id="messages">
       <h3>📩 アドバイザーとのメッセージ</h3>
       ${messageThreadHtml(messages, { viewerRole: 'member', deleteBasePath: '/member/messages' })}
@@ -568,6 +563,11 @@ function memberPage({
         </div>
         <button class="btn primary" type="submit">送信</button>
       </form>
+    </div>
+
+    <div class="card">
+      <h3>🏆 今月のランキング(上位3名掲載)</h3>
+      ${leaderboardHtml(ranked, userId)}
     </div>
 
     <div class="card">
