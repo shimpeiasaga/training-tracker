@@ -490,6 +490,36 @@ const server = http.createServer(async (req, res) => {
       return redirect(res, `/admin/member/${match[1]}#video`);
     }
 
+    match = pathname.match(/^\/admin\/members\/(\d+)\/media\/html$/);
+    if (match && method === 'POST') {
+      const MAX_HTML_BYTES = 500 * 1024; // 500KB(呼吸法ツールなどの自己完結HTML想定)
+      try {
+        const { fields, files } = await parseMultipart(req);
+        const title = (fields.title || '').trim();
+        const file = files.htmlFile;
+        if (!title || !file || !file.content || !file.content.length) {
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('タイトルとHTMLファイルを指定してください')}#video`);
+        }
+        if (file.content.length > MAX_HTML_BYTES) {
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('HTMLファイルは500KBまでです')}#video`);
+        }
+        const ext = (file.filename.split('.').pop() || '').toLowerCase();
+        if (ext !== 'html' && ext !== 'htm') {
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('.htmlファイルのみアップロードできます')}#video`);
+        }
+        await db.addMemberMedia(match[1], {
+          type: 'html',
+          title,
+          htmlContent: file.content.toString('utf8'),
+          note: (fields.note || '').trim(),
+          createdAt: stats.nowStr(),
+        });
+      } catch (err) {
+        return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message || 'HTMLツールの登録に失敗しました')}#video`);
+      }
+      return redirect(res, `/admin/member/${match[1]}#video`);
+    }
+
     match = pathname.match(/^\/admin\/members\/(\d+)\/media\/(\d+)\/delete$/);
     if (match && method === 'POST') {
       await db.removeMemberMedia(match[1], match[2]);
@@ -562,6 +592,34 @@ const server = http.createServer(async (req, res) => {
         });
       } catch (err) {
         return redirect(res, `/admin/library?error=${encodeURIComponent(err.message || '画像の登録に失敗しました')}`);
+      }
+      return redirect(res, '/admin/library');
+    }
+
+    if (pathname === '/admin/library/html' && method === 'POST') {
+      const MAX_HTML_BYTES = 500 * 1024; // 500KB(呼吸法ツールなどの自己完結HTML想定)
+      try {
+        const { fields, files } = await parseMultipart(req);
+        const title = (fields.title || '').trim();
+        const file = files.htmlFile;
+        if (!title || !file || !file.content || !file.content.length) {
+          return redirect(res, `/admin/library?error=${encodeURIComponent('タイトルとHTMLファイルを指定してください')}`);
+        }
+        if (file.content.length > MAX_HTML_BYTES) {
+          return redirect(res, `/admin/library?error=${encodeURIComponent('HTMLファイルは500KBまでです')}`);
+        }
+        const ext = (file.filename.split('.').pop() || '').toLowerCase();
+        if (ext !== 'html' && ext !== 'htm') {
+          return redirect(res, `/admin/library?error=${encodeURIComponent('.htmlファイルのみアップロードできます')}`);
+        }
+        await db.addLibraryItem({
+          type: 'html',
+          title,
+          htmlContent: file.content.toString('utf8'),
+          createdAt: stats.nowStr(),
+        });
+      } catch (err) {
+        return redirect(res, `/admin/library?error=${encodeURIComponent(err.message || 'HTMLツールの登録に失敗しました')}`);
       }
       return redirect(res, '/admin/library');
     }

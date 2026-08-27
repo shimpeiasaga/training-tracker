@@ -165,6 +165,7 @@ function mapMedia(doc) {
     url: doc.url,
     imageData: doc.imageData,
     mimeType: doc.mimeType,
+    htmlContent: doc.htmlContent,
     note: doc.note || '',
     createdAt: doc.createdAt,
   };
@@ -180,7 +181,7 @@ async function getMediaForMember(memberId) {
   return docs.map(mapMedia);
 }
 
-async function addMemberMedia(memberId, { type, title, url, imageData, mimeType, note, createdAt }) {
+async function addMemberMedia(memberId, { type, title, url, imageData, mimeType, htmlContent, note, createdAt }) {
   const db = await getDb();
   const user = await db.collection('users').findOne({ _id: Number(memberId) });
   if (!user) throw new Error('会員が見つかりません');
@@ -189,7 +190,7 @@ async function addMemberMedia(memberId, { type, title, url, imageData, mimeType,
     throw new Error(`動画・画像は合わせて最大${MAX_MEMBER_MEDIA}件までです`);
   }
   const id = await nextSeq('media');
-  const doc = { _id: id, memberId: Number(memberId), type, title, url, imageData, mimeType, note, createdAt };
+  const doc = { _id: id, memberId: Number(memberId), type, title, url, imageData, mimeType, htmlContent, note, createdAt };
   await db.collection('media').insertOne(doc);
   return mapMedia(doc);
 }
@@ -219,6 +220,7 @@ function mapLibraryItem(doc) {
     url: doc.url,
     imageData: doc.imageData,
     mimeType: doc.mimeType,
+    htmlContent: doc.htmlContent,
     createdAt: doc.createdAt,
   };
 }
@@ -229,14 +231,14 @@ async function getLibrary() {
   return docs.map(mapLibraryItem);
 }
 
-async function addLibraryItem({ type, title, url, imageData, mimeType, createdAt }) {
+async function addLibraryItem({ type, title, url, imageData, mimeType, htmlContent, createdAt }) {
   const db = await getDb();
   const count = await db.collection('library').countDocuments({});
   if (count >= MAX_LIBRARY_ITEMS) {
     throw new Error(`素材ライブラリは最大${MAX_LIBRARY_ITEMS}件までです`);
   }
   const id = await nextSeq('library');
-  const doc = { _id: id, type, title, url, imageData, mimeType, createdAt };
+  const doc = { _id: id, type, title, url, imageData, mimeType, htmlContent, createdAt };
   await db.collection('library').insertOne(doc);
   return mapLibraryItem(doc);
 }
@@ -266,6 +268,7 @@ async function assignLibraryItemToMember(memberId, libraryId, note, createdAt) {
     url: libItem.url,
     imageData: libItem.imageData,
     mimeType: libItem.mimeType,
+    htmlContent: libItem.htmlContent,
     note: note || '',
     createdAt,
   };
@@ -488,6 +491,7 @@ async function exportRaw() {
       url: m.url,
       imageData: m.imageData,
       mimeType: m.mimeType,
+      htmlContent: m.htmlContent,
       note: m.note || '',
       createdAt: m.createdAt,
     })),
@@ -498,6 +502,7 @@ async function exportRaw() {
       url: m.url,
       imageData: m.imageData,
       mimeType: m.mimeType,
+      htmlContent: m.htmlContent,
       createdAt: m.createdAt,
     })),
     nextUserId: (usersCounter ? usersCounter.seq : 0) + 1,
@@ -559,6 +564,7 @@ async function importRaw(jsonStr) {
         url: m.url,
         imageData: m.imageData,
         mimeType: m.mimeType,
+        htmlContent: m.htmlContent,
         note: m.note || '',
         createdAt: m.createdAt,
       }))
@@ -598,6 +604,7 @@ async function importRaw(jsonStr) {
         url: m.url,
         imageData: m.imageData,
         mimeType: m.mimeType,
+        htmlContent: m.htmlContent,
         createdAt: m.createdAt,
       }))
     );

@@ -32,6 +32,18 @@ function imageDisplayHtml(item) {
   return `<img class="media-image" src="data:${escapeHtml(item.mimeType)};base64,${item.imageData}" alt="${escapeHtml(item.title)}">`;
 }
 
+// 自己完結型HTMLツール(呼吸法など)の表示。sandboxでスクリプトのみ許可し、ホスト側から隔離する
+function htmlToolEmbedHtml(item) {
+  return `<div class="html-embed"><iframe sandbox="allow-scripts" srcdoc="${escapeHtml(item.htmlContent || '')}"></iframe></div>`;
+}
+
+// 種類に応じた表示切り替え(動画・画像・HTMLツール)
+function mediaEmbedHtml(item) {
+  if (item.type === 'image') return imageDisplayHtml(item);
+  if (item.type === 'html') return htmlToolEmbedHtml(item);
+  return videoPlayerHtml(item);
+}
+
 // 番号表示用(①②③...)。MAX_MEMBER_MEDIAが10件までなので⑩まであれば足りる
 const CIRCLED_NUMS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
 
@@ -68,44 +80,55 @@ function mediaListHtml(media, { deletable = false, memberId } = {}) {
               </details>`
             : ''
         }
-        ${v.type === 'image' ? imageDisplayHtml(v) : videoPlayerHtml(v)}
+        ${mediaEmbedHtml(v)}
       </div>`
     )
     .join('');
   return `<div class="video-list">${items}</div>`;
 }
 
-// 素材ライブラリの一覧表示。mode='manage'は削除ボタン付き(ライブラリ管理画面用)、
-// mode='pick'は会員に追加するための小さいフォーム付き(会員詳細画面の選択欄用)
+// ライブラリ選択欄用の小さいサムネイル(画像はミニ画像、動画・HTMLツールはアイコン)
+function libraryThumbHtml(v) {
+  if (v.type === 'image') {
+    return `<img class="lib-pick-thumb" src="data:${escapeHtml(v.mimeType)};base64,${v.imageData}" alt="">`;
+  }
+  const icon = v.type === 'html' ? '🧘' : '🎥';
+  return `<div class="lib-pick-thumb lib-pick-icon">${icon}</div>`;
+}
+
+// 素材ライブラリの一覧表示。mode='manage'は削除ボタン付きでフルサイズ表示(ライブラリ管理画面用)、
+// mode='pick'はサムネイル+タイトルのみのコンパクトな行表示(会員詳細画面の選択欄用)
 function libraryListHtml(library, { mode = 'manage', memberId } = {}) {
   if (!library || !library.length) {
     return '<p style="font-size:0.85rem;color:var(--muted);margin:0;">まだライブラリに素材がありません</p>';
+  }
+  if (mode === 'pick') {
+    const rows = library
+      .map(
+        (v) => `
+        <div class="lib-pick-row">
+          ${libraryThumbHtml(v)}
+          <div class="lib-pick-title">${escapeHtml(v.title)}</div>
+          <form method="POST" action="/admin/members/${memberId}/media/from-library/${v.id}" class="lib-pick-form">
+            <input type="text" name="note" maxlength="200" placeholder="セット数・回数(任意)">
+            <button class="btn primary" type="submit">追加</button>
+          </form>
+        </div>`
+      )
+      .join('');
+    return `<div class="lib-pick-list">${rows}</div>`;
   }
   const items = library
     .map(
       (v) => `
       <div class="video-item">
         <div class="video-item-head">
-          <h4>${v.type === 'image' ? '📷' : '🎥'} ${escapeHtml(v.title)}</h4>
-          ${
-            mode === 'manage'
-              ? `<form method="POST" action="/admin/library/${v.id}/delete" onsubmit="return confirm('ライブラリから削除しますか?(会員に既に追加済みの分は残ります)');">
-                  <button class="btn danger" type="submit">削除</button>
-                </form>`
-              : ''
-          }
+          <h4>${v.type === 'image' ? '📷' : v.type === 'html' ? '🧘' : '🎥'} ${escapeHtml(v.title)}</h4>
+          <form method="POST" action="/admin/library/${v.id}/delete" onsubmit="return confirm('ライブラリから削除しますか?(会員に既に追加済みの分は残ります)');">
+            <button class="btn danger" type="submit">削除</button>
+          </form>
         </div>
-        ${
-          mode === 'pick'
-            ? `<form method="POST" action="/admin/members/${memberId}/media/from-library/${v.id}" class="inline-form" style="margin-bottom:10px;">
-                <div class="form-row" style="flex:2;">
-                  <input type="text" name="note" maxlength="200" placeholder="セット数・回数(任意) 例: 3セット×10回">
-                </div>
-                <button class="btn primary" type="submit">この会員に追加</button>
-              </form>`
-            : ''
-        }
-        ${v.type === 'image' ? imageDisplayHtml(v) : videoPlayerHtml(v)}
+        ${mediaEmbedHtml(v)}
       </div>`
     )
     .join('');
@@ -716,6 +739,21 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
                 <input type="text" name="note" maxlength="200" placeholder="例: 3セット×10回">
               </div>
               <button class="btn primary" type="submit">画像を追加</button>
+            </form>
+            <form method="POST" action="/admin/members/${member.id}/media/html" enctype="multipart/form-data" class="inline-form" style="margin-top:12px;">
+              <div class="form-row">
+                <label>HTMLツール タイトル</label>
+                <input type="text" name="title" maxlength="60" required placeholder="例: 呼吸法トレーニング">
+              </div>
+              <div class="form-row">
+                <label>HTMLファイル(.html、500KBまで)</label>
+                <input type="file" name="htmlFile" accept=".html,.htm" required>
+              </div>
+              <div class="form-row">
+                <label>セット数・回数(任意)</label>
+                <input type="text" name="note" maxlength="200" placeholder="例: 1日3回">
+              </div>
+              <button class="btn primary" type="submit">HTMLツールを追加</button>
             </form>`
           : `<p style="font-size:0.85rem;color:var(--muted);margin-top:12px;">上限の${MAX_MEMBER_MEDIA}件に達しています。追加するには先に削除してください。</p>`
       }
@@ -812,6 +850,17 @@ function adminLibraryPage({ library, error }) {
                 <input type="file" name="image" accept="image/*" required>
               </div>
               <button class="btn primary" type="submit">画像を追加</button>
+            </form>
+            <form method="POST" action="/admin/library/html" enctype="multipart/form-data" class="inline-form" style="margin-top:12px;">
+              <div class="form-row">
+                <label>HTMLツール タイトル</label>
+                <input type="text" name="title" maxlength="60" required placeholder="例: 呼吸法トレーニング">
+              </div>
+              <div class="form-row">
+                <label>HTMLファイル(.html、500KBまで)</label>
+                <input type="file" name="htmlFile" accept=".html,.htm" required>
+              </div>
+              <button class="btn primary" type="submit">HTMLツールを追加</button>
             </form>`
           : `<p style="font-size:0.85rem;color:var(--muted);margin-top:12px;">上限の${MAX_LIBRARY_ITEMS}件に達しています。追加するには先に削除してください。</p>`
       }

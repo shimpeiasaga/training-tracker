@@ -155,7 +155,7 @@ function getMediaForMember(memberId) {
     .sort((a, b) => a.id - b.id);
 }
 
-function addMemberMedia(memberId, { type, title, url, imageData, mimeType, note, createdAt }) {
+function addMemberMedia(memberId, { type, title, url, imageData, mimeType, htmlContent, note, createdAt }) {
   const data = load();
   const user = data.users.find((u) => u.id === Number(memberId));
   if (!user) throw new Error('会員が見つかりません');
@@ -163,7 +163,7 @@ function addMemberMedia(memberId, { type, title, url, imageData, mimeType, note,
   if (existing.length >= MAX_MEMBER_MEDIA) {
     throw new Error(`動画・画像は合わせて最大${MAX_MEMBER_MEDIA}件までです`);
   }
-  const item = { id: data.nextMediaId++, memberId: Number(memberId), type, title, url, imageData, mimeType, note, createdAt };
+  const item = { id: data.nextMediaId++, memberId: Number(memberId), type, title, url, imageData, mimeType, htmlContent, note, createdAt };
   data.media.push(item);
   save(data);
   return item;
@@ -192,12 +192,12 @@ function getLibrary() {
     .sort((a, b) => b.id - a.id);
 }
 
-function addLibraryItem({ type, title, url, imageData, mimeType, createdAt }) {
+function addLibraryItem({ type, title, url, imageData, mimeType, htmlContent, createdAt }) {
   const data = load();
   if (data.library.length >= MAX_LIBRARY_ITEMS) {
     throw new Error(`素材ライブラリは最大${MAX_LIBRARY_ITEMS}件までです`);
   }
-  const item = { id: data.nextLibraryId++, type, title, url, imageData, mimeType, createdAt };
+  const item = { id: data.nextLibraryId++, type, title, url, imageData, mimeType, htmlContent, createdAt };
   data.library.push(item);
   save(data);
   return item;
@@ -228,6 +228,7 @@ function assignLibraryItemToMember(memberId, libraryId, note, createdAt) {
     url: libItem.url,
     imageData: libItem.imageData,
     mimeType: libItem.mimeType,
+    htmlContent: libItem.htmlContent,
     note: note || '',
     createdAt,
   };
