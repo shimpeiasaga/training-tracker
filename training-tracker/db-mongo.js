@@ -1,7 +1,7 @@
 // MongoDB Atlas を使ったデータ保存(Renderの再デプロイ・スリープでデータが消えないようにするため)
 // 環境変数 MONGODB_URI が設定されている時だけ使われる(db.js が自動で切り替える)
 const { MongoClient } = require('mongodb');
-const { MAX_MEMBER_MEDIA } = require('./stats');
+const { MAX_MEMBER_MEDIA, MAX_LIBRARY_ITEMS } = require('./stats');
 
 const uri = process.env.MONGODB_URI;
 let clientPromise = null;
@@ -209,6 +209,70 @@ async function updateMemberMediaNote(memberId, mediaId, note) {
   if (result.matchedCount === 0) throw new Error('動画・画像が見つかりません');
 }
 
+// --- 素材ライブラリ(会員に配る前の動画・画像を管理者がまとめて置いておく場所) ---
+function mapLibraryItem(doc) {
+  if (!doc) return undefined;
+  return {
+    id: doc._id,
+    type: doc.type,
+    title: doc.title,
+    url: doc.url,
+    imageData: doc.imageData,
+    mimeType: doc.mimeType,
+    createdAt: doc.createdAt,
+  };
+}
+
+async function getLibrary() {
+  const db = await getDb();
+  const docs = await db.collection('library').find({}).sort({ _id: -1 }).toArray();
+  return docs.map(mapLibraryItem);
+}
+
+async function addLibraryItem({ type, title, url, imageData, mimeType, createdAt }) {
+  const db = await getDb();
+  const count = await db.collection('library').countDocuments({});
+  if (count >= MAX_LIBRARY_ITEMS) {
+    throw new Error(`素材ライブラリは最大${MAX_LIBRARY_ITEMS}件までです`);
+  }
+  const id = await nextSeq('library');
+  const doc = { _id: id, type, title, url, imageData, mimeType, createdAt };
+  await db.collection('library').insertOne(doc);
+  return mapLibraryItem(doc);
+}
+
+async function removeLibraryItem(libraryId) {
+  const db = await getDb();
+  await db.collection('library').deleteOne({ _id: Number(libraryId) });
+}
+
+// ライブラリの素材を、指定した会員の動画・画像一覧にコピーする(ライブラリ側は残る)
+async function assignLibraryItemToMember(memberId, libraryId, note, createdAt) {
+  const db = await getDb();
+  const user = await db.collection('users').findOne({ _id: Number(memberId) });
+  if (!user) throw new Error('会員が見つかりません');
+  const libItem = await db.collection('library').findOne({ _id: Number(libraryId) });
+  if (!libItem) throw new Error('素材が見つかりません');
+  const existingCount = await db.collection('media').countDocuments({ memberId: Number(memberId) });
+  if (existingCount >= MAX_MEMBER_MEDIA) {
+    throw new Error(`動画・画像は合わせて最大${MAX_MEMBER_MEDIA}件までです`);
+  }
+  const id = await nextSeq('media');
+  const doc = {
+    _id: id,
+    memberId: Number(memberId),
+    type: libItem.type,
+    title: libItem.title,
+    url: libItem.url,
+    imageData: libItem.imageData,
+    mimeType: libItem.mimeType,
+    note: note || '',
+    createdAt,
+  };
+  await db.collection('media').insertOne(doc);
+  return mapMedia(doc);
+}
+
 async function deleteUser(id) {
   const db = await getDb();
   await db.collection('users').deleteOne({ _id: Number(id) });
@@ -381,12 +445,14 @@ async function exportRaw() {
   const messages = await db.collection('messages').find({}).toArray();
   const posts = await db.collection('posts').find({}).toArray();
   const media = await db.collection('media').find({}).toArray();
+  const library = await db.collection('library').find({}).toArray();
   const usersCounter = await db.collection('counters').findOne({ _id: 'users' });
   const checkinsCounter = await db.collection('counters').findOne({ _id: 'checkins' });
   const messagesCounter = await db.collection('counters').findOne({ _id: 'messages' });
   const postsCounter = await db.collection('counters').findOne({ _id: 'posts' });
   const repliesCounter = await db.collection('counters').findOne({ _id: 'replies' });
   const mediaCounter = await db.collection('counters').findOne({ _id: 'media' });
+  const libraryCounter = await db.collection('counters').findOne({ _id: 'library' });
   const data = {
     users: users.map((u) => ({
       id: u._id,
@@ -425,12 +491,22 @@ async function exportRaw() {
       note: m.note || '',
       createdAt: m.createdAt,
     })),
+    library: library.map((m) => ({
+      id: m._id,
+      type: m.type,
+      title: m.title,
+      url: m.url,
+      imageData: m.imageData,
+      mimeType: m.mimeType,
+      createdAt: m.createdAt,
+    })),
     nextUserId: (usersCounter ? usersCounter.seq : 0) + 1,
     nextCheckinId: (checkinsCounter ? checkinsCounter.seq : 0) + 1,
     nextMessageId: (messagesCounter ? messagesCounter.seq : 0) + 1,
     nextPostId: (postsCounter ? postsCounter.seq : 0) + 1,
     nextReplyId: (repliesCounter ? repliesCounter.seq : 0) + 1,
     nextMediaId: (mediaCounter ? mediaCounter.seq : 0) + 1,
+    nextLibraryId: (libraryCounter ? libraryCounter.seq : 0) + 1,
   };
   return JSON.stringify(data, null, 2);
 }
@@ -443,12 +519,14 @@ async function importRaw(jsonStr) {
   const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
   const posts = Array.isArray(parsed.posts) ? parsed.posts : [];
   const media = Array.isArray(parsed.media) ? parsed.media : [];
+  const library = Array.isArray(parsed.library) ? parsed.library : [];
   const db = await getDb();
   await db.collection('users').deleteMany({});
   await db.collection('checkins').deleteMany({});
   await db.collection('messages').deleteMany({});
   await db.collection('posts').deleteMany({});
   await db.collection('media').deleteMany({});
+  await db.collection('library').deleteMany({});
   if (parsed.users.length) {
     await db.collection('users').insertMany(
       parsed.users.map((u) => ({
@@ -511,18 +589,33 @@ async function importRaw(jsonStr) {
       }))
     );
   }
+  if (library.length) {
+    await db.collection('library').insertMany(
+      library.map((m) => ({
+        _id: m.id,
+        type: m.type,
+        title: m.title,
+        url: m.url,
+        imageData: m.imageData,
+        mimeType: m.mimeType,
+        createdAt: m.createdAt,
+      }))
+    );
+  }
   const maxUserId = parsed.users.reduce((m, u) => Math.max(m, u.id), 0);
   const maxCheckinId = parsed.checkins.reduce((m, c) => Math.max(m, c.id), 0);
   const maxMessageId = messages.reduce((m, x) => Math.max(m, x.id), 0);
   const maxPostId = posts.reduce((m, x) => Math.max(m, x.id), 0);
   const maxReplyId = posts.flatMap((p) => (p.replies || []).map((r) => r.id)).reduce((m, id) => Math.max(m, id), 0);
   const maxMediaId = allMedia.reduce((m, x) => Math.max(m, x.id), 0);
+  const maxLibraryId = library.reduce((m, x) => Math.max(m, x.id), 0);
   await db.collection('counters').updateOne({ _id: 'users' }, { $set: { seq: maxUserId } }, { upsert: true });
   await db.collection('counters').updateOne({ _id: 'checkins' }, { $set: { seq: maxCheckinId } }, { upsert: true });
   await db.collection('counters').updateOne({ _id: 'messages' }, { $set: { seq: maxMessageId } }, { upsert: true });
   await db.collection('counters').updateOne({ _id: 'posts' }, { $set: { seq: maxPostId } }, { upsert: true });
   await db.collection('counters').updateOne({ _id: 'replies' }, { $set: { seq: maxReplyId } }, { upsert: true });
   await db.collection('counters').updateOne({ _id: 'media' }, { $set: { seq: maxMediaId } }, { upsert: true });
+  await db.collection('counters').updateOne({ _id: 'library' }, { $set: { seq: maxLibraryId } }, { upsert: true });
 }
 
 module.exports = {
@@ -548,6 +641,10 @@ module.exports = {
   addMemberMedia,
   removeMemberMedia,
   updateMemberMediaNote,
+  getLibrary,
+  addLibraryItem,
+  removeLibraryItem,
+  assignLibraryItemToMember,
   getMessagesForMember,
   hasUnreadMessages,
   markMessagesRead,

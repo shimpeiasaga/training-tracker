@@ -1,5 +1,5 @@
 // HTMLをテンプレートエンジンなしで生成する(外部依存なし)
-const { MONTHLY_GOAL, REWARD_MONTHS, MAX_MEMBER_MEDIA } = require('./stats');
+const { MONTHLY_GOAL, REWARD_MONTHS, MAX_MEMBER_MEDIA, MAX_LIBRARY_ITEMS } = require('./stats');
 const CHART_JS = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js';
 
 function escapeHtml(str) {
@@ -66,6 +66,43 @@ function mediaListHtml(media, { deletable = false, memberId } = {}) {
                   <button class="btn" type="submit">保存</button>
                 </form>
               </details>`
+            : ''
+        }
+        ${v.type === 'image' ? imageDisplayHtml(v) : videoPlayerHtml(v)}
+      </div>`
+    )
+    .join('');
+  return `<div class="video-list">${items}</div>`;
+}
+
+// 素材ライブラリの一覧表示。mode='manage'は削除ボタン付き(ライブラリ管理画面用)、
+// mode='pick'は会員に追加するための小さいフォーム付き(会員詳細画面の選択欄用)
+function libraryListHtml(library, { mode = 'manage', memberId } = {}) {
+  if (!library || !library.length) {
+    return '<p style="font-size:0.85rem;color:var(--muted);margin:0;">まだライブラリに素材がありません</p>';
+  }
+  const items = library
+    .map(
+      (v) => `
+      <div class="video-item">
+        <div class="video-item-head">
+          <h4>${v.type === 'image' ? '📷' : '🎥'} ${escapeHtml(v.title)}</h4>
+          ${
+            mode === 'manage'
+              ? `<form method="POST" action="/admin/library/${v.id}/delete" onsubmit="return confirm('ライブラリから削除しますか?(会員に既に追加済みの分は残ります)');">
+                  <button class="btn danger" type="submit">削除</button>
+                </form>`
+              : ''
+          }
+        </div>
+        ${
+          mode === 'pick'
+            ? `<form method="POST" action="/admin/members/${memberId}/media/from-library/${v.id}" class="inline-form" style="margin-bottom:10px;">
+                <div class="form-row" style="flex:2;">
+                  <input type="text" name="note" maxlength="200" placeholder="セット数・回数(任意) 例: 3セット×10回">
+                </div>
+                <button class="btn primary" type="submit">この会員に追加</button>
+              </form>`
             : ''
         }
         ${v.type === 'image' ? imageDisplayHtml(v) : videoPlayerHtml(v)}
@@ -553,6 +590,10 @@ function adminPage({ members, teamWeekly, ranked, error, message, unreadMembers 
     ${message ? `<div class="message">${escapeHtml(message)}</div>` : ''}
 
     <div class="card">
+      <a class="btn" href="/admin/library">🎥📷 素材ライブラリを管理</a>
+    </div>
+
+    <div class="card">
       <h3>🏆 今月のランキング</h3>
       ${ranked.length ? leaderboardHtml(ranked, null, 3) : '<p style="font-size:0.85rem;color:var(--muted);margin:0;">まだデータがありません</p>'}
     </div>
@@ -602,7 +643,7 @@ function adminPage({ members, teamWeekly, ranked, error, message, unreadMembers 
   });
 }
 
-function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGrid, prevMonthKey, nextMonthKey, calendarBasePath, weekly, monthCount, monthlyStreak, monthlySeries, rewardsEarned, rewardsGiven, rewardsPending, badges, checkinDates, checkinRecords, badgeLog, messages, media, videoError, hadUnreadMessages }) {
+function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGrid, prevMonthKey, nextMonthKey, calendarBasePath, weekly, monthCount, monthlyStreak, monthlySeries, rewardsEarned, rewardsGiven, rewardsPending, badges, checkinDates, checkinRecords, badgeLog, messages, media, library, videoError, hadUnreadMessages }) {
   const script = `
     const monthlySeries = ${JSON.stringify(monthlySeries)};
     new Chart(document.getElementById('monthlyChart'), {
@@ -642,7 +683,11 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
       ${mediaListHtml(media, { deletable: true, memberId: member.id })}
       ${
         (media || []).length < MAX_MEMBER_MEDIA
-          ? `<form method="POST" action="/admin/members/${member.id}/media/video" class="inline-form" style="margin-top:12px;">
+          ? `<details style="margin-top:12px;">
+              <summary style="cursor:pointer;color:var(--primary);font-size:0.9rem;">📚 ライブラリから選んで追加</summary>
+              <div style="margin-top:10px;">${libraryListHtml(library, { mode: 'pick', memberId: member.id })}</div>
+            </details>
+            <form method="POST" action="/admin/members/${member.id}/media/video" class="inline-form" style="margin-top:16px;">
               <div class="form-row">
                 <label>動画タイトル</label>
                 <input type="text" name="title" maxlength="60" required placeholder="例: スクワットフォーム講座">
@@ -733,6 +778,47 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
   });
 }
 
+// 素材ライブラリ管理画面(会員に配る前の動画・画像をここにまとめて登録しておく)
+function adminLibraryPage({ library, error }) {
+  return layout({
+    title: '素材ライブラリ | オンライン運動元気倶楽部',
+    topbar: `<div class="topbar"><span class="brand"><a href="/admin">&larr; 管理者ダッシュボード</a></span><div class="topbar-actions"><a href="/board">💬 みんなの掲示板</a><form method="POST" action="/logout"><button type="submit">ログアウト</button></form></div></div>`,
+    body: `
+    <div class="card">
+      <h2>📚 素材ライブラリ(${(library || []).length}/${MAX_LIBRARY_ITEMS})</h2>
+      <p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">ここに登録した動画・画像は、各会員の詳細ページから選んで追加できます。</p>
+      ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
+      ${libraryListHtml(library, { mode: 'manage' })}
+      ${
+        (library || []).length < MAX_LIBRARY_ITEMS
+          ? `<form method="POST" action="/admin/library/video" class="inline-form" style="margin-top:16px;">
+              <div class="form-row">
+                <label>動画タイトル</label>
+                <input type="text" name="title" maxlength="60" required placeholder="例: スクワットフォーム講座">
+              </div>
+              <div class="form-row">
+                <label>動画URL(YouTubeのURLを推奨)</label>
+                <input type="text" name="url" required placeholder="https://www.youtube.com/watch?v=...">
+              </div>
+              <button class="btn primary" type="submit">動画を追加</button>
+            </form>
+            <form method="POST" action="/admin/library/image" enctype="multipart/form-data" class="inline-form" style="margin-top:12px;">
+              <div class="form-row">
+                <label>画像タイトル</label>
+                <input type="text" name="title" maxlength="60" required placeholder="例: 8月のフォームチェック">
+              </div>
+              <div class="form-row">
+                <label>画像ファイル(jpg/png/webp/gif、5MBまで)</label>
+                <input type="file" name="image" accept="image/*" required>
+              </div>
+              <button class="btn primary" type="submit">画像を追加</button>
+            </form>`
+          : `<p style="font-size:0.85rem;color:var(--muted);margin-top:12px;">上限の${MAX_LIBRARY_ITEMS}件に達しています。追加するには先に削除してください。</p>`
+      }
+    </div>`,
+  });
+}
+
 // 会員なら誰でも投稿できる、返信はスタッフ(管理者)のみの掲示板
 function boardPage({ posts, userRole, userName, userId, error }) {
   const postsHtml = posts.length
@@ -793,4 +879,4 @@ function boardPage({ posts, userRole, userName, userId, error }) {
   });
 }
 
-module.exports = { escapeHtml, loginPage, memberPage, memberPasswordPage, adminPage, adminMemberPage, boardPage };
+module.exports = { escapeHtml, loginPage, memberPage, memberPasswordPage, adminPage, adminMemberPage, adminLibraryPage, boardPage };

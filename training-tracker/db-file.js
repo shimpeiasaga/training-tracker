@@ -2,7 +2,7 @@
 // 自分のPCで動かす場合はこちらが使われる(MONGODB_URIが無い時のデフォルト)
 const fs = require('fs');
 const path = require('path');
-const { MAX_MEMBER_MEDIA } = require('./stats');
+const { MAX_MEMBER_MEDIA, MAX_LIBRARY_ITEMS } = require('./stats');
 
 const DATA_DIR = path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'data.json');
@@ -20,12 +20,14 @@ function ensureDataFile() {
           posts: [],
           sessions: [],
           media: [],
+          library: [],
           nextUserId: 1,
           nextCheckinId: 1,
           nextMessageId: 1,
           nextPostId: 1,
           nextReplyId: 1,
           nextMediaId: 1,
+          nextLibraryId: 1,
         },
         null,
         2
@@ -42,11 +44,15 @@ function load() {
   if (!Array.isArray(data.posts)) data.posts = [];
   if (!Array.isArray(data.sessions)) data.sessions = [];
   if (!Array.isArray(data.media)) data.media = [];
+  if (!Array.isArray(data.library)) data.library = [];
   if (typeof data.nextMessageId !== 'number') data.nextMessageId = 1;
   if (typeof data.nextPostId !== 'number') data.nextPostId = 1;
   if (typeof data.nextReplyId !== 'number') data.nextReplyId = 1;
   if (typeof data.nextMediaId !== 'number') {
     data.nextMediaId = data.media.reduce((max, m) => Math.max(max, m.id + 1), 1);
+  }
+  if (typeof data.nextLibraryId !== 'number') {
+    data.nextLibraryId = data.library.reduce((max, m) => Math.max(max, m.id + 1), 1);
   }
   // 旧形式(会員ごとにvideos配列を埋め込んでいた)から、独立したmedia一覧への移行(初回のみ)
   let migrated = false;
@@ -175,6 +181,57 @@ function updateMemberMediaNote(memberId, mediaId, note) {
   const item = data.media.find((m) => m.id === Number(mediaId) && m.memberId === Number(memberId));
   if (!item) throw new Error('動画・画像が見つかりません');
   item.note = note;
+  save(data);
+  return item;
+}
+
+// --- 素材ライブラリ(会員に配る前の動画・画像を管理者がまとめて置いておく場所) ---
+function getLibrary() {
+  return load()
+    .library.slice()
+    .sort((a, b) => b.id - a.id);
+}
+
+function addLibraryItem({ type, title, url, imageData, mimeType, createdAt }) {
+  const data = load();
+  if (data.library.length >= MAX_LIBRARY_ITEMS) {
+    throw new Error(`素材ライブラリは最大${MAX_LIBRARY_ITEMS}件までです`);
+  }
+  const item = { id: data.nextLibraryId++, type, title, url, imageData, mimeType, createdAt };
+  data.library.push(item);
+  save(data);
+  return item;
+}
+
+function removeLibraryItem(libraryId) {
+  const data = load();
+  data.library = data.library.filter((m) => m.id !== Number(libraryId));
+  save(data);
+}
+
+// ライブラリの素材を、指定した会員の動画・画像一覧にコピーする(ライブラリ側は残る)
+function assignLibraryItemToMember(memberId, libraryId, note, createdAt) {
+  const data = load();
+  const user = data.users.find((u) => u.id === Number(memberId));
+  if (!user) throw new Error('会員が見つかりません');
+  const libItem = data.library.find((m) => m.id === Number(libraryId));
+  if (!libItem) throw new Error('素材が見つかりません');
+  const existing = data.media.filter((m) => m.memberId === Number(memberId));
+  if (existing.length >= MAX_MEMBER_MEDIA) {
+    throw new Error(`動画・画像は合わせて最大${MAX_MEMBER_MEDIA}件までです`);
+  }
+  const item = {
+    id: data.nextMediaId++,
+    memberId: Number(memberId),
+    type: libItem.type,
+    title: libItem.title,
+    url: libItem.url,
+    imageData: libItem.imageData,
+    mimeType: libItem.mimeType,
+    note: note || '',
+    createdAt,
+  };
+  data.media.push(item);
   save(data);
   return item;
 }
@@ -355,6 +412,10 @@ function importRaw(jsonStr) {
   if (typeof parsed.nextMediaId !== 'number') {
     parsed.nextMediaId = parsed.media.reduce((max, m) => Math.max(max, m.id + 1), 1);
   }
+  if (!Array.isArray(parsed.library)) parsed.library = [];
+  if (typeof parsed.nextLibraryId !== 'number') {
+    parsed.nextLibraryId = parsed.library.reduce((max, m) => Math.max(max, m.id + 1), 1);
+  }
   save(parsed);
 }
 
@@ -380,6 +441,10 @@ module.exports = {
   addMemberMedia,
   removeMemberMedia,
   updateMemberMediaNote,
+  getLibrary,
+  addLibraryItem,
+  removeLibraryItem,
+  assignLibraryItemToMember,
   getMessagesForMember,
   hasUnreadMessages,
   markMessagesRead,

@@ -508,6 +508,82 @@ const server = http.createServer(async (req, res) => {
       return redirect(res, `/admin/member/${match[1]}#video`);
     }
 
+    // --- 素材ライブラリ(会員に配る前の動画・画像をまとめて置いておく場所) ---
+    if (pathname === '/admin/library' && method === 'GET') {
+      return sendHtml(
+        res,
+        200,
+        views.adminLibraryPage({
+          library: await db.getLibrary(),
+          error: url.searchParams.get('error'),
+        })
+      );
+    }
+
+    if (pathname === '/admin/library/video' && method === 'POST') {
+      const body = await parseBody(req);
+      const title = (body.title || '').trim();
+      const videoUrl = (body.url || '').trim();
+      if (title && videoUrl) {
+        try {
+          await db.addLibraryItem({ type: 'video', title, url: videoUrl, createdAt: stats.nowStr() });
+        } catch (err) {
+          return redirect(res, `/admin/library?error=${encodeURIComponent(err.message)}`);
+        }
+      }
+      return redirect(res, '/admin/library');
+    }
+
+    if (pathname === '/admin/library/image' && method === 'POST') {
+      const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
+      const ALLOWED_TYPES = { 'image/jpeg': true, 'image/png': true, 'image/webp': true, 'image/gif': true };
+      const EXT_TYPE = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif' };
+      try {
+        const { fields, files } = await parseMultipart(req);
+        const title = (fields.title || '').trim();
+        const file = files.image;
+        if (!title || !file || !file.content || !file.content.length) {
+          return redirect(res, `/admin/library?error=${encodeURIComponent('タイトルと画像ファイルを指定してください')}`);
+        }
+        if (file.content.length > MAX_IMAGE_BYTES) {
+          return redirect(res, `/admin/library?error=${encodeURIComponent('画像は5MBまでです')}`);
+        }
+        const ext = (file.filename.split('.').pop() || '').toLowerCase();
+        const mimeType = ALLOWED_TYPES[file.contentType] ? file.contentType : EXT_TYPE[ext];
+        if (!mimeType) {
+          return redirect(res, `/admin/library?error=${encodeURIComponent('対応していない画像形式です(jpg/png/webp/gifのみ)')}`);
+        }
+        await db.addLibraryItem({
+          type: 'image',
+          title,
+          imageData: file.content.toString('base64'),
+          mimeType,
+          createdAt: stats.nowStr(),
+        });
+      } catch (err) {
+        return redirect(res, `/admin/library?error=${encodeURIComponent(err.message || '画像の登録に失敗しました')}`);
+      }
+      return redirect(res, '/admin/library');
+    }
+
+    match = pathname.match(/^\/admin\/library\/(\d+)\/delete$/);
+    if (match && method === 'POST') {
+      await db.removeLibraryItem(match[1]);
+      return redirect(res, '/admin/library');
+    }
+
+    match = pathname.match(/^\/admin\/members\/(\d+)\/media\/from-library\/(\d+)$/);
+    if (match && method === 'POST') {
+      const body = await parseBody(req);
+      const note = (body.note || '').trim();
+      try {
+        await db.assignLibraryItemToMember(match[1], match[2], note, stats.nowStr());
+      } catch (err) {
+        return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message)}#video`);
+      }
+      return redirect(res, `/admin/member/${match[1]}#video`);
+    }
+
     if (pathname === '/admin/backup' && method === 'GET') {
       const raw = await db.exportRaw();
       const filename = `training-tracker-backup-${stats.todayStr()}.json`;
@@ -577,6 +653,7 @@ const server = http.createServer(async (req, res) => {
           badgeLog: stats.badgeUnlockLog(checkins),
           messages: adminViewMessages,
           media: await db.getMediaForMember(member.id),
+          library: await db.getLibrary(),
           videoError: url.searchParams.get('error'),
         })
       );
