@@ -253,24 +253,28 @@ function historyListHtml(checkinRecords, { limit = 30, editable = false } = {}) 
   const items = shown
     .map((c) => {
       const note = c.note || '';
+      if (editable) {
+        return `
+        <li>
+          <details class="history-item">
+            <summary class="history-date">
+              <span>${formatDateJa(c.date)}</span>
+              ${note ? `<span class="history-note-preview">${escapeHtml(note)}</span>` : ''}
+            </summary>
+            <form method="POST" action="/member/checkins/${c.date}/note" class="inline-form" style="margin-top:8px;">
+              <div class="form-row">
+                <textarea name="note" rows="2" maxlength="300" placeholder="例: スクワット3セット×10回、ベンチプレス...">${escapeHtml(note)}</textarea>
+              </div>
+              <button class="btn" type="submit">保存</button>
+            </form>
+          </details>
+        </li>`;
+      }
       return `
       <li>
         <div class="history-row">
           <span>${formatDateJa(c.date)}</span>
           ${note ? `<div class="history-note">${escapeHtml(note)}</div>` : ''}
-          ${
-            editable
-              ? `<details class="history-note-edit">
-                  <summary>${note ? 'メモを編集' : 'メモを追加(自由記入)'}</summary>
-                  <form method="POST" action="/member/checkins/${c.date}/note" class="inline-form">
-                    <div class="form-row">
-                      <textarea name="note" rows="2" maxlength="300" placeholder="例: スクワット3セット×10回、ベンチプレス...">${escapeHtml(note)}</textarea>
-                    </div>
-                    <button class="btn" type="submit">保存</button>
-                  </form>
-                </details>`
-              : ''
-          }
         </div>
       </li>`;
     })
@@ -406,6 +410,38 @@ function monthlyProgressHtml({ monthCount, monthGoal, monthlyStreak, rewardMonth
     </p>`;
 }
 
+// 月間目標をrewardMonths連続で達成すると「メニュー更新」の対象になる、という進捗をスタンプカード風に見せる
+// (達成した月にはハンコ(✓)が押され、間の線もつながって進み具合がひと目で分かる)
+function menuUpdateCardHtml({ monthlyStreak, rewardMonths }) {
+  const cyclePos = monthlyStreak % rewardMonths;
+  const completed = cyclePos === 0 && monthlyStreak > 0 ? rewardMonths : cyclePos;
+  const remaining = rewardMonths - completed;
+
+  const circleParts = [];
+  const labelParts = [];
+  for (let i = 0; i < rewardMonths; i++) {
+    const filled = i < completed;
+    circleParts.push(`<div class="stampA ${filled ? 'filled' : ''}">${filled ? '✓' : i + 1}</div>`);
+    labelParts.push(`<div class="stampA-label ${filled ? 'done' : ''}">${i + 1}ヶ月目</div>`);
+    if (i < rewardMonths - 1) {
+      const lineFilled = i + 1 < completed;
+      circleParts.push(`<div class="stampA-line ${lineFilled ? 'filled' : ''}"></div>`);
+      labelParts.push('<div class="stampA-spacer"></div>');
+    }
+  }
+
+  const achieved = completed >= rewardMonths;
+  const message = achieved
+    ? `🎉 ${rewardMonths}ヶ月連続で目標を達成しました!メニュー更新のチャンスです。アドバイザーにご相談ください。`
+    : `あと${remaining}ヶ月連続で目標を達成すると、メニュー更新のチャンスです!`;
+
+  return `
+    <div class="stampA-row">${circleParts.join('')}</div>
+    <div class="stampA-labels">${labelParts.join('')}</div>
+    <p class="stamp-msg ${achieved ? 'celebrate' : ''}">${message}</p>
+    <p style="font-size:0.8rem;color:var(--muted);margin:8px 0 0;">月${MONTHLY_GOAL}回の実施を${rewardMonths}ヶ月連続で達成すると、メニュー更新1回の対象になります。以降も継続すれば${rewardMonths}ヶ月ごとに繰り返し対象になります。</p>`;
+}
+
 function memberPage({
   userName,
   today,
@@ -458,7 +494,7 @@ function memberPage({
 
   return layout({
     title: 'マイページ | オンライン運動元気倶楽部',
-    topbar: topbar(`${escapeHtml(userName)} さん`, true, true),
+    topbar: topbar(`${escapeHtml(userName)} さん`, false, true),
     script,
     body: `
     ${unreadBanner}
@@ -487,8 +523,13 @@ function memberPage({
     </div>
 
     <div class="card">
-      <h3>今月の目標(月${monthGoal}回 × 3ヶ月継続で特典)</h3>
+      <h3>今月の目標(月${monthGoal}回)</h3>
       ${monthlyProgressHtml({ monthCount, monthGoal, monthlyStreak, rewardMonths })}
+    </div>
+
+    <div class="card">
+      <h3>メニュー更新</h3>
+      ${menuUpdateCardHtml({ monthlyStreak, rewardMonths })}
     </div>
 
     <div class="card">
@@ -503,7 +544,7 @@ function memberPage({
 
     <div class="card" id="history">
       <h3>実施した日</h3>
-      <p style="font-size:0.8rem;color:var(--muted);margin:0 0 8px;">日付をタップすると、セット数・回数などのメモを追加・編集できます</p>
+      <p style="font-size:0.8rem;color:var(--muted);margin:0 0 8px;">日付をタップするとメモを自由に追加、編集できます</p>
       ${historyListHtml(checkinRecords, { editable: true })}
     </div>
 
@@ -530,7 +571,10 @@ function memberPage({
     </div>
 
     <div class="card">
-      <a class="btn" href="/member/password">🔑 パスワード変更</a>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <a class="btn" href="/member/password">🔑 パスワード変更</a>
+        <form method="POST" action="/logout"><button class="btn" type="submit">ログアウト</button></form>
+      </div>
     </div>`,
   });
 }
