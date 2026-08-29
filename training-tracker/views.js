@@ -1,5 +1,5 @@
 // HTMLをテンプレートエンジンなしで生成する(外部依存なし)
-const { MONTHLY_GOAL, REWARD_MONTHS, MAX_MEMBER_MEDIA, MAX_LIBRARY_ITEMS } = require('./stats');
+const { MONTHLY_GOAL, REWARD_MONTHS, MAX_MEMBER_MEDIA, MAX_LIBRARY_ITEMS, DEFAULT_LIBRARY_CATEGORY, MAX_LIBRARY_CATEGORIES } = require('./stats');
 const CHART_JS = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js';
 
 function escapeHtml(str) {
@@ -96,43 +96,91 @@ function libraryThumbHtml(v) {
   return `<div class="lib-pick-thumb lib-pick-icon">${icon}</div>`;
 }
 
-// 素材ライブラリの一覧表示。mode='manage'は削除ボタン付きでフルサイズ表示(ライブラリ管理画面用)、
-// mode='pick'はサムネイル+タイトルのみのコンパクトな行表示(会員詳細画面の選択欄用)
-function libraryListHtml(library, { mode = 'manage', memberId } = {}) {
+// カテゴリー一覧(管理画面で登録された順)の<option>一覧(selectedを選択状態にする)
+function categoryOptionsHtml(selected, categories) {
+  return categories
+    .map((c) => `<option value="${escapeHtml(c)}" ${c === selected ? 'selected' : ''}>${escapeHtml(c)}</option>`)
+    .join('');
+}
+
+// 素材をカテゴリー(渡されたcategoriesの順)ごとにグループ分けする。未設定・不正な値は「その他」扱い
+function groupLibraryByCategory(library, categories) {
+  const groups = new Map(categories.map((c) => [c, []]));
+  if (!groups.has(DEFAULT_LIBRARY_CATEGORY)) groups.set(DEFAULT_LIBRARY_CATEGORY, []);
+  library.forEach((v) => {
+    const cat = groups.has(v.category) ? v.category : DEFAULT_LIBRARY_CATEGORY;
+    groups.get(cat).push(v);
+  });
+  return Array.from(groups.entries()).filter(([, items]) => items.length);
+}
+
+// 素材ライブラリの一覧表示。mode='manage'は削除ボタン・カテゴリー変更付きでフルサイズ表示(ライブラリ管理画面用)、
+// mode='pick'はサムネイル+タイトルのみのコンパクトな行表示(会員詳細画面の選択欄用)。どちらもカテゴリーごとに見出しを付けて表示する
+function libraryListHtml(library, { mode = 'manage', memberId, categories = [] } = {}) {
   if (!library || !library.length) {
     return '<p style="font-size:0.85rem;color:var(--muted);margin:0;">まだライブラリに素材がありません</p>';
   }
+  const groups = groupLibraryByCategory(library, categories);
+
   if (mode === 'pick') {
-    const rows = library
+    return groups
       .map(
-        (v) => `
-        <div class="lib-pick-row">
-          ${libraryThumbHtml(v)}
-          <div class="lib-pick-title">${escapeHtml(v.title)}</div>
-          <form method="POST" action="/admin/members/${memberId}/media/from-library/${v.id}" class="lib-pick-form">
-            <input type="text" name="note" maxlength="200" placeholder="セット数・回数(任意)">
-            <button class="btn primary" type="submit">追加</button>
-          </form>
+        ([cat, items]) => `
+        <div class="lib-category-group">
+          <div class="lib-category-heading">${escapeHtml(cat)}</div>
+          <div class="lib-pick-list">
+            ${items
+              .map(
+                (v) => `
+              <div class="lib-pick-row">
+                ${libraryThumbHtml(v)}
+                <div class="lib-pick-title">${escapeHtml(v.title)}</div>
+                <form method="POST" action="/admin/members/${memberId}/media/from-library/${v.id}" class="lib-pick-form">
+                  <input type="text" name="note" maxlength="200" placeholder="セット数・回数(任意)">
+                  <button class="btn primary" type="submit">追加</button>
+                </form>
+              </div>`
+              )
+              .join('')}
+          </div>
         </div>`
       )
       .join('');
-    return `<div class="lib-pick-list">${rows}</div>`;
   }
-  const items = library
+
+  return groups
     .map(
-      (v) => `
-      <div class="video-item">
-        <div class="video-item-head">
-          <h4>${v.type === 'image' ? '📷' : v.type === 'html' ? '🧘' : '🎥'} ${escapeHtml(v.title)}</h4>
-          <form method="POST" action="/admin/library/${v.id}/delete" onsubmit="return confirm('ライブラリから削除しますか?(会員に既に追加済みの分は残ります)');">
-            <button class="btn danger" type="submit">削除</button>
-          </form>
+      ([cat, items]) => `
+      <div class="lib-category-group">
+        <div class="lib-category-heading">${escapeHtml(cat)}</div>
+        <div class="video-list">
+          ${items
+            .map(
+              (v) => `
+            <div class="video-item">
+              <div class="video-item-head">
+                <h4>${v.type === 'image' ? '📷' : v.type === 'html' ? '🧘' : '🎥'} ${escapeHtml(v.title)}</h4>
+                <form method="POST" action="/admin/library/${v.id}/delete" onsubmit="return confirm('ライブラリから削除しますか?(会員に既に追加済みの分は残ります)');">
+                  <button class="btn danger" type="submit">削除</button>
+                </form>
+              </div>
+              <details class="history-note-edit" style="margin-bottom:8px;">
+                <summary>カテゴリーを変更(現在: ${escapeHtml(cat)})</summary>
+                <form method="POST" action="/admin/library/${v.id}/category" class="inline-form">
+                  <div class="form-row">
+                    <select name="category">${categoryOptionsHtml(cat, categories)}</select>
+                  </div>
+                  <button class="btn" type="submit">変更</button>
+                </form>
+              </details>
+              ${mediaEmbedHtml(v)}
+            </div>`
+            )
+            .join('')}
         </div>
-        ${mediaEmbedHtml(v)}
       </div>`
     )
     .join('');
-  return `<div class="video-list">${items}</div>`;
 }
 
 function layout({ title, body, script = '', topbar = '' }) {
@@ -710,7 +758,7 @@ function adminPage({ members, teamWeekly, ranked, error, message, unreadMembers 
   });
 }
 
-function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGrid, prevMonthKey, nextMonthKey, calendarBasePath, weekly, monthCount, monthlyStreak, monthlySeries, rewardsEarned, rewardsGiven, rewardsPending, badges, checkinDates, checkinRecords, badgeLog, messages, media, library, videoError, hadUnreadMessages }) {
+function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGrid, prevMonthKey, nextMonthKey, calendarBasePath, weekly, monthCount, monthlyStreak, monthlySeries, rewardsEarned, rewardsGiven, rewardsPending, badges, checkinDates, checkinRecords, badgeLog, messages, media, library, categories, videoError, hadUnreadMessages }) {
   const script = `
     const monthlySeries = ${JSON.stringify(monthlySeries)};
     new Chart(document.getElementById('monthlyChart'), {
@@ -752,7 +800,7 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
         (media || []).length < MAX_MEMBER_MEDIA
           ? `<details style="margin-top:12px;">
               <summary style="cursor:pointer;color:var(--primary);font-size:0.9rem;">📚 ライブラリから選んで追加</summary>
-              <div style="margin-top:10px;">${libraryListHtml(library, { mode: 'pick', memberId: member.id })}</div>
+              <div style="margin-top:10px;">${libraryListHtml(library, { mode: 'pick', memberId: member.id, categories })}</div>
             </details>
             <form method="POST" action="/admin/members/${member.id}/media/video" class="inline-form" style="margin-top:16px;">
               <div class="form-row">
@@ -861,16 +909,61 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
 }
 
 // 素材ライブラリ管理画面(会員に配る前の動画・画像をここにまとめて登録しておく)
-function adminLibraryPage({ library, error }) {
+// カテゴリーの追加・名前変更・削除を行う管理カード(「その他」は既定カテゴリーとして変更・削除不可)
+function categoryManageCardHtml(categories) {
+  const rows = categories
+    .map(
+      (c) => `
+      <div class="lib-category-manage-row">
+        <span class="lib-category-manage-name">${escapeHtml(c)}</span>
+        ${
+          c === DEFAULT_LIBRARY_CATEGORY
+            ? '<span class="lib-category-manage-fixed">既定・変更不可</span>'
+            : `<details class="history-note-edit">
+                <summary>名前を変更</summary>
+                <form method="POST" action="/admin/library/categories/rename" class="inline-form">
+                  <input type="hidden" name="oldName" value="${escapeHtml(c)}">
+                  <div class="form-row"><input type="text" name="newName" maxlength="20" value="${escapeHtml(c)}" required></div>
+                  <button class="btn" type="submit">変更</button>
+                </form>
+              </details>
+              <form method="POST" action="/admin/library/categories/delete" onsubmit="return confirm('「${escapeHtml(c)}」を削除しますか?このカテゴリーの素材は「その他」に移動します。');">
+                <input type="hidden" name="name" value="${escapeHtml(c)}">
+                <button class="btn danger" type="submit">削除</button>
+              </form>`
+        }
+      </div>`
+    )
+    .join('');
+  const addForm =
+    categories.length < MAX_LIBRARY_CATEGORIES
+      ? `<form method="POST" action="/admin/library/categories/add" class="inline-form" style="margin-top:12px;">
+          <div class="form-row">
+            <label>新しいカテゴリー名</label>
+            <input type="text" name="name" maxlength="20" required placeholder="例: 有酸素">
+          </div>
+          <button class="btn primary" type="submit">追加</button>
+        </form>`
+      : `<p style="font-size:0.85rem;color:var(--muted);margin-top:12px;">カテゴリーは最大${MAX_LIBRARY_CATEGORIES}件までです。</p>`;
+  return `<div class="lib-category-manage-list">${rows}</div>${addForm}`;
+}
+
+function adminLibraryPage({ library, categories = [], error }) {
   return layout({
     title: '素材ライブラリ | オンライン運動元気倶楽部',
     topbar: `<div class="topbar"><span class="brand"><a href="/admin">&larr; 管理者ダッシュボード</a></span><div class="topbar-actions"><a href="/board">💬 みんなの掲示板</a><form method="POST" action="/logout"><button type="submit">ログアウト</button></form></div></div>`,
     body: `
+    ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
+
+    <div class="card">
+      <h3>カテゴリーの管理</h3>
+      ${categoryManageCardHtml(categories)}
+    </div>
+
     <div class="card">
       <h2>📚 素材ライブラリ(${(library || []).length}/${MAX_LIBRARY_ITEMS})</h2>
       <p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">ここに登録した動画・画像は、各会員の詳細ページから選んで追加できます。</p>
-      ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
-      ${libraryListHtml(library, { mode: 'manage' })}
+      ${libraryListHtml(library, { mode: 'manage', categories })}
       ${
         (library || []).length < MAX_LIBRARY_ITEMS
           ? `<form method="POST" action="/admin/library/video" class="inline-form" style="margin-top:16px;">
@@ -881,6 +974,10 @@ function adminLibraryPage({ library, error }) {
               <div class="form-row">
                 <label>動画URL(YouTubeのURLを推奨)</label>
                 <input type="text" name="url" required placeholder="https://www.youtube.com/watch?v=...">
+              </div>
+              <div class="form-row">
+                <label>カテゴリー</label>
+                <select name="category">${categoryOptionsHtml(DEFAULT_LIBRARY_CATEGORY, categories)}</select>
               </div>
               <button class="btn primary" type="submit">動画を追加</button>
             </form>
@@ -893,6 +990,10 @@ function adminLibraryPage({ library, error }) {
                 <label>画像ファイル(jpg/png/webp/gif、5MBまで)</label>
                 <input type="file" name="image" accept="image/*" required>
               </div>
+              <div class="form-row">
+                <label>カテゴリー</label>
+                <select name="category">${categoryOptionsHtml(DEFAULT_LIBRARY_CATEGORY, categories)}</select>
+              </div>
               <button class="btn primary" type="submit">画像を追加</button>
             </form>
             <form method="POST" action="/admin/library/html" enctype="multipart/form-data" class="inline-form" style="margin-top:12px;">
@@ -903,6 +1004,10 @@ function adminLibraryPage({ library, error }) {
               <div class="form-row">
                 <label>HTMLファイル(.html、500KBまで)</label>
                 <input type="file" name="htmlFile" accept=".html,.htm" required>
+              </div>
+              <div class="form-row">
+                <label>カテゴリー</label>
+                <select name="category">${categoryOptionsHtml(DEFAULT_LIBRARY_CATEGORY, categories)}</select>
               </div>
               <button class="btn primary" type="submit">HTMLツールを追加</button>
             </form>`

@@ -1,7 +1,7 @@
 // MongoDB Atlas を使ったデータ保存(Renderの再デプロイ・スリープでデータが消えないようにするため)
 // 環境変数 MONGODB_URI が設定されている時だけ使われる(db.js が自動で切り替える)
 const { MongoClient } = require('mongodb');
-const { MAX_MEMBER_MEDIA, MAX_LIBRARY_ITEMS } = require('./stats');
+const { MAX_MEMBER_MEDIA, MAX_LIBRARY_ITEMS, DEFAULT_LIBRARY_CATEGORIES_SEED, DEFAULT_LIBRARY_CATEGORY, MAX_LIBRARY_CATEGORIES } = require('./stats');
 
 const uri = process.env.MONGODB_URI;
 let clientPromise = null;
@@ -221,6 +221,7 @@ function mapLibraryItem(doc) {
     imageData: doc.imageData,
     mimeType: doc.mimeType,
     htmlContent: doc.htmlContent,
+    category: doc.category || DEFAULT_LIBRARY_CATEGORY,
     createdAt: doc.createdAt,
   };
 }
@@ -231,14 +232,87 @@ async function getLibrary() {
   return docs.map(mapLibraryItem);
 }
 
-async function addLibraryItem({ type, title, url, imageData, mimeType, htmlContent, createdAt }) {
+const LIBRARY_CATEGORIES_DOC_ID = 'libraryCategories';
+
+// カテゴリー一覧を保証する(settingsコレクションの1ドキュメントに保存。初回はシード値で作成、「その他」は必ず含める)
+async function ensureCategoriesDoc(db) {
+  let doc = await db.collection('settings').findOne({ _id: LIBRARY_CATEGORIES_DOC_ID });
+  if (!doc) {
+    doc = { _id: LIBRARY_CATEGORIES_DOC_ID, list: DEFAULT_LIBRARY_CATEGORIES_SEED.slice() };
+    await db.collection('settings').insertOne(doc);
+  }
+  if (!doc.list.includes(DEFAULT_LIBRARY_CATEGORY)) {
+    doc.list.push(DEFAULT_LIBRARY_CATEGORY);
+    await db.collection('settings').updateOne({ _id: LIBRARY_CATEGORIES_DOC_ID }, { $set: { list: doc.list } });
+  }
+  return doc.list;
+}
+
+async function getLibraryCategories() {
+  const db = await getDb();
+  const list = await ensureCategoriesDoc(db);
+  return list.slice();
+}
+
+// カテゴリーを追加する(「その他」の手前に挿入し、「その他」が常に最後になるようにする)
+async function addLibraryCategory(name) {
+  const db = await getDb();
+  const list = await ensureCategoriesDoc(db);
+  const trimmed = (name || '').trim();
+  if (!trimmed) throw new Error('カテゴリー名を入力してください');
+  if (trimmed.length > 20) throw new Error('カテゴリー名は20文字までです');
+  if (list.includes(trimmed)) throw new Error('同じ名前のカテゴリーがすでにあります');
+  if (list.length >= MAX_LIBRARY_CATEGORIES) throw new Error(`カテゴリーは最大${MAX_LIBRARY_CATEGORIES}件までです`);
+  const newList = list.slice();
+  const otherIdx = newList.indexOf(DEFAULT_LIBRARY_CATEGORY);
+  if (otherIdx === -1) newList.push(trimmed);
+  else newList.splice(otherIdx, 0, trimmed);
+  await db.collection('settings').updateOne({ _id: LIBRARY_CATEGORIES_DOC_ID }, { $set: { list: newList } });
+  return newList;
+}
+
+// カテゴリー名を変更する(該当する素材のカテゴリーも一緒に更新する)。「その他」は変更不可
+async function renameLibraryCategory(oldName, newName) {
+  const db = await getDb();
+  const list = await ensureCategoriesDoc(db);
+  if (oldName === DEFAULT_LIBRARY_CATEGORY) throw new Error('「その他」の名前は変更できません');
+  const idx = list.indexOf(oldName);
+  if (idx === -1) throw new Error('カテゴリーが見つかりません');
+  const trimmed = (newName || '').trim();
+  if (!trimmed) throw new Error('カテゴリー名を入力してください');
+  if (trimmed.length > 20) throw new Error('カテゴリー名は20文字までです');
+  if (trimmed !== oldName && list.includes(trimmed)) throw new Error('同じ名前のカテゴリーがすでにあります');
+  const newList = list.slice();
+  newList[idx] = trimmed;
+  await db.collection('settings').updateOne({ _id: LIBRARY_CATEGORIES_DOC_ID }, { $set: { list: newList } });
+  await db.collection('library').updateMany({ category: oldName }, { $set: { category: trimmed } });
+  return newList;
+}
+
+// カテゴリーを削除する(このカテゴリーを使っていた素材は「その他」に移す)。「その他」は削除不可
+async function deleteLibraryCategory(name) {
+  const db = await getDb();
+  const list = await ensureCategoriesDoc(db);
+  if (name === DEFAULT_LIBRARY_CATEGORY) throw new Error('「その他」は削除できません');
+  const idx = list.indexOf(name);
+  if (idx === -1) throw new Error('カテゴリーが見つかりません');
+  const newList = list.slice();
+  newList.splice(idx, 1);
+  await db.collection('settings').updateOne({ _id: LIBRARY_CATEGORIES_DOC_ID }, { $set: { list: newList } });
+  await db.collection('library').updateMany({ category: name }, { $set: { category: DEFAULT_LIBRARY_CATEGORY } });
+  return newList;
+}
+
+async function addLibraryItem({ type, title, url, imageData, mimeType, htmlContent, category, createdAt }) {
   const db = await getDb();
   const count = await db.collection('library').countDocuments({});
   if (count >= MAX_LIBRARY_ITEMS) {
     throw new Error(`素材ライブラリは最大${MAX_LIBRARY_ITEMS}件までです`);
   }
+  const categories = await ensureCategoriesDoc(db);
+  const cat = categories.includes(category) ? category : DEFAULT_LIBRARY_CATEGORY;
   const id = await nextSeq('library');
-  const doc = { _id: id, type, title, url, imageData, mimeType, htmlContent, createdAt };
+  const doc = { _id: id, type, title, url, imageData, mimeType, htmlContent, category: cat, createdAt };
   await db.collection('library').insertOne(doc);
   return mapLibraryItem(doc);
 }
@@ -246,6 +320,15 @@ async function addLibraryItem({ type, title, url, imageData, mimeType, htmlConte
 async function removeLibraryItem(libraryId) {
   const db = await getDb();
   await db.collection('library').deleteOne({ _id: Number(libraryId) });
+}
+
+// ライブラリ素材のカテゴリーを変更する
+async function updateLibraryItemCategory(libraryId, category) {
+  const db = await getDb();
+  const categories = await ensureCategoriesDoc(db);
+  const cat = categories.includes(category) ? category : DEFAULT_LIBRARY_CATEGORY;
+  const result = await db.collection('library').updateOne({ _id: Number(libraryId) }, { $set: { category: cat } });
+  if (result.matchedCount === 0) throw new Error('素材が見つかりません');
 }
 
 // ライブラリの素材を、指定した会員の動画・画像一覧にコピーする(ライブラリ側は残る)
@@ -449,6 +532,7 @@ async function exportRaw() {
   const posts = await db.collection('posts').find({}).toArray();
   const media = await db.collection('media').find({}).toArray();
   const library = await db.collection('library').find({}).toArray();
+  const categories = await ensureCategoriesDoc(db);
   const usersCounter = await db.collection('counters').findOne({ _id: 'users' });
   const checkinsCounter = await db.collection('counters').findOne({ _id: 'checkins' });
   const messagesCounter = await db.collection('counters').findOne({ _id: 'messages' });
@@ -503,8 +587,10 @@ async function exportRaw() {
       imageData: m.imageData,
       mimeType: m.mimeType,
       htmlContent: m.htmlContent,
+      category: m.category || DEFAULT_LIBRARY_CATEGORY,
       createdAt: m.createdAt,
     })),
+    categories,
     nextUserId: (usersCounter ? usersCounter.seq : 0) + 1,
     nextCheckinId: (checkinsCounter ? checkinsCounter.seq : 0) + 1,
     nextMessageId: (messagesCounter ? messagesCounter.seq : 0) + 1,
@@ -605,6 +691,7 @@ async function importRaw(jsonStr) {
         imageData: m.imageData,
         mimeType: m.mimeType,
         htmlContent: m.htmlContent,
+        category: m.category || DEFAULT_LIBRARY_CATEGORY,
         createdAt: m.createdAt,
       }))
     );
@@ -623,6 +710,8 @@ async function importRaw(jsonStr) {
   await db.collection('counters').updateOne({ _id: 'replies' }, { $set: { seq: maxReplyId } }, { upsert: true });
   await db.collection('counters').updateOne({ _id: 'media' }, { $set: { seq: maxMediaId } }, { upsert: true });
   await db.collection('counters').updateOne({ _id: 'library' }, { $set: { seq: maxLibraryId } }, { upsert: true });
+  const categories = Array.isArray(parsed.categories) && parsed.categories.length ? parsed.categories : DEFAULT_LIBRARY_CATEGORIES_SEED.slice();
+  await db.collection('settings').updateOne({ _id: LIBRARY_CATEGORIES_DOC_ID }, { $set: { list: categories } }, { upsert: true });
 }
 
 module.exports = {
@@ -649,8 +738,13 @@ module.exports = {
   removeMemberMedia,
   updateMemberMediaNote,
   getLibrary,
+  getLibraryCategories,
+  addLibraryCategory,
+  renameLibraryCategory,
+  deleteLibraryCategory,
   addLibraryItem,
   removeLibraryItem,
+  updateLibraryItemCategory,
   assignLibraryItemToMember,
   getMessagesForMember,
   hasUnreadMessages,

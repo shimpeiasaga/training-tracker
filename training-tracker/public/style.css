@@ -297,13 +297,15 @@ tr:hover { background: #fafcfa; }
 .form-row { margin-bottom: 10px; }
 .form-row label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 4px; }
 .form-row input,
-.form-row textarea {
+.form-row textarea,
+.form-row select {
   width: 100%;
   padding: 10px;
   border: 1px solid var(--border);
   border-radius: 6px;
   font-size: 16px; /* iOSでフォーカス時に勝手に拡大ズームされるのを防ぐ */
   font-family: inherit;
+  background: #fff;
 }
 .form-row textarea { resize: vertical; }
 
@@ -492,6 +494,50 @@ tr:hover { background: #fafcfa; }
 }
 
 /* --- ライブラリ選択欄(コンパクト表示) --- */
+.lib-category-group { margin-bottom: 18px; }
+.lib-category-group:last-child { margin-bottom: 0; }
+.lib-category-heading {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--primary);
+  background: #eaf2fd;
+  display: inline-block;
+  padding: 3px 12px;
+  border-radius: 10px;
+  margin-bottom: 8px;
+}
+.lib-category-manage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.lib-category-manage-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  flex-wrap: wrap;
+}
+.lib-category-manage-name {
+  flex: 1 1 100px;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+.lib-category-manage-fixed {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.lib-category-manage-row .history-note-edit form {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.lib-category-manage-row .history-note-edit .form-row {
+  margin-bottom: 0;
+  min-width: 120px;
+}
 .lib-pick-list {
   display: flex;
   flex-direction: column;

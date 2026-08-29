@@ -545,18 +545,50 @@ const server = http.createServer(async (req, res) => {
         200,
         views.adminLibraryPage({
           library: await db.getLibrary(),
+          categories: await db.getLibraryCategories(),
           error: url.searchParams.get('error'),
         })
       );
+    }
+
+    if (pathname === '/admin/library/categories/add' && method === 'POST') {
+      const body = await parseBody(req);
+      try {
+        await db.addLibraryCategory(body.name);
+      } catch (err) {
+        return redirect(res, `/admin/library?error=${encodeURIComponent(err.message)}`);
+      }
+      return redirect(res, '/admin/library');
+    }
+
+    if (pathname === '/admin/library/categories/rename' && method === 'POST') {
+      const body = await parseBody(req);
+      try {
+        await db.renameLibraryCategory(body.oldName, body.newName);
+      } catch (err) {
+        return redirect(res, `/admin/library?error=${encodeURIComponent(err.message)}`);
+      }
+      return redirect(res, '/admin/library');
+    }
+
+    if (pathname === '/admin/library/categories/delete' && method === 'POST') {
+      const body = await parseBody(req);
+      try {
+        await db.deleteLibraryCategory(body.name);
+      } catch (err) {
+        return redirect(res, `/admin/library?error=${encodeURIComponent(err.message)}`);
+      }
+      return redirect(res, '/admin/library');
     }
 
     if (pathname === '/admin/library/video' && method === 'POST') {
       const body = await parseBody(req);
       const title = (body.title || '').trim();
       const videoUrl = (body.url || '').trim();
+      const category = (body.category || '').trim();
       if (title && videoUrl) {
         try {
-          await db.addLibraryItem({ type: 'video', title, url: videoUrl, createdAt: stats.nowStr() });
+          await db.addLibraryItem({ type: 'video', title, url: videoUrl, category, createdAt: stats.nowStr() });
         } catch (err) {
           return redirect(res, `/admin/library?error=${encodeURIComponent(err.message)}`);
         }
@@ -588,6 +620,7 @@ const server = http.createServer(async (req, res) => {
           title,
           imageData: file.content.toString('base64'),
           mimeType,
+          category: (fields.category || '').trim(),
           createdAt: stats.nowStr(),
         });
       } catch (err) {
@@ -616,6 +649,7 @@ const server = http.createServer(async (req, res) => {
           type: 'html',
           title,
           htmlContent: file.content.toString('utf8'),
+          category: (fields.category || '').trim(),
           createdAt: stats.nowStr(),
         });
       } catch (err) {
@@ -627,6 +661,17 @@ const server = http.createServer(async (req, res) => {
     match = pathname.match(/^\/admin\/library\/(\d+)\/delete$/);
     if (match && method === 'POST') {
       await db.removeLibraryItem(match[1]);
+      return redirect(res, '/admin/library');
+    }
+
+    match = pathname.match(/^\/admin\/library\/(\d+)\/category$/);
+    if (match && method === 'POST') {
+      const body = await parseBody(req);
+      try {
+        await db.updateLibraryItemCategory(match[1], (body.category || '').trim());
+      } catch (err) {
+        return redirect(res, `/admin/library?error=${encodeURIComponent(err.message || 'カテゴリーの変更に失敗しました')}`);
+      }
       return redirect(res, '/admin/library');
     }
 
@@ -712,6 +757,7 @@ const server = http.createServer(async (req, res) => {
           messages: adminViewMessages,
           media: await db.getMediaForMember(member.id),
           library: await db.getLibrary(),
+          categories: await db.getLibraryCategories(),
           videoError: url.searchParams.get('error'),
         })
       );

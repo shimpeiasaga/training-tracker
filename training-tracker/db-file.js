@@ -2,7 +2,7 @@
 // 自分のPCで動かす場合はこちらが使われる(MONGODB_URIが無い時のデフォルト)
 const fs = require('fs');
 const path = require('path');
-const { MAX_MEMBER_MEDIA, MAX_LIBRARY_ITEMS } = require('./stats');
+const { MAX_MEMBER_MEDIA, MAX_LIBRARY_ITEMS, DEFAULT_LIBRARY_CATEGORIES_SEED, DEFAULT_LIBRARY_CATEGORY, MAX_LIBRARY_CATEGORIES } = require('./stats');
 
 const DATA_DIR = path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'data.json');
@@ -192,12 +192,82 @@ function getLibrary() {
     .sort((a, b) => b.id - a.id);
 }
 
-function addLibraryItem({ type, title, url, imageData, mimeType, htmlContent, createdAt }) {
+// カテゴリー一覧を保証する(初回はシード値で初期化、「その他」は必ず含める)
+function ensureCategories(data) {
+  if (!Array.isArray(data.categories) || !data.categories.length) {
+    data.categories = DEFAULT_LIBRARY_CATEGORIES_SEED.slice();
+  }
+  if (!data.categories.includes(DEFAULT_LIBRARY_CATEGORY)) {
+    data.categories.push(DEFAULT_LIBRARY_CATEGORY);
+  }
+  return data.categories;
+}
+
+function getLibraryCategories() {
+  const data = load();
+  const categories = ensureCategories(data);
+  save(data);
+  return categories.slice();
+}
+
+// カテゴリーを追加する(「その他」の手前に挿入し、「その他」が常に最後になるようにする)
+function addLibraryCategory(name) {
+  const data = load();
+  const categories = ensureCategories(data);
+  const trimmed = (name || '').trim();
+  if (!trimmed) throw new Error('カテゴリー名を入力してください');
+  if (trimmed.length > 20) throw new Error('カテゴリー名は20文字までです');
+  if (categories.includes(trimmed)) throw new Error('同じ名前のカテゴリーがすでにあります');
+  if (categories.length >= MAX_LIBRARY_CATEGORIES) throw new Error(`カテゴリーは最大${MAX_LIBRARY_CATEGORIES}件までです`);
+  const otherIdx = categories.indexOf(DEFAULT_LIBRARY_CATEGORY);
+  if (otherIdx === -1) categories.push(trimmed);
+  else categories.splice(otherIdx, 0, trimmed);
+  save(data);
+  return categories.slice();
+}
+
+// カテゴリー名を変更する(該当する素材のカテゴリーも一緒に更新する)。「その他」は変更不可
+function renameLibraryCategory(oldName, newName) {
+  const data = load();
+  const categories = ensureCategories(data);
+  if (oldName === DEFAULT_LIBRARY_CATEGORY) throw new Error('「その他」の名前は変更できません');
+  const idx = categories.indexOf(oldName);
+  if (idx === -1) throw new Error('カテゴリーが見つかりません');
+  const trimmed = (newName || '').trim();
+  if (!trimmed) throw new Error('カテゴリー名を入力してください');
+  if (trimmed.length > 20) throw new Error('カテゴリー名は20文字までです');
+  if (trimmed !== oldName && categories.includes(trimmed)) throw new Error('同じ名前のカテゴリーがすでにあります');
+  categories[idx] = trimmed;
+  data.library.forEach((item) => {
+    if (item.category === oldName) item.category = trimmed;
+  });
+  save(data);
+  return categories.slice();
+}
+
+// カテゴリーを削除する(このカテゴリーを使っていた素材は「その他」に移す)。「その他」は削除不可
+function deleteLibraryCategory(name) {
+  const data = load();
+  const categories = ensureCategories(data);
+  if (name === DEFAULT_LIBRARY_CATEGORY) throw new Error('「その他」は削除できません');
+  const idx = categories.indexOf(name);
+  if (idx === -1) throw new Error('カテゴリーが見つかりません');
+  categories.splice(idx, 1);
+  data.library.forEach((item) => {
+    if (item.category === name) item.category = DEFAULT_LIBRARY_CATEGORY;
+  });
+  save(data);
+  return categories.slice();
+}
+
+function addLibraryItem({ type, title, url, imageData, mimeType, htmlContent, category, createdAt }) {
   const data = load();
   if (data.library.length >= MAX_LIBRARY_ITEMS) {
     throw new Error(`素材ライブラリは最大${MAX_LIBRARY_ITEMS}件までです`);
   }
-  const item = { id: data.nextLibraryId++, type, title, url, imageData, mimeType, htmlContent, createdAt };
+  const categories = ensureCategories(data);
+  const cat = categories.includes(category) ? category : DEFAULT_LIBRARY_CATEGORY;
+  const item = { id: data.nextLibraryId++, type, title, url, imageData, mimeType, htmlContent, category: cat, createdAt };
   data.library.push(item);
   save(data);
   return item;
@@ -207,6 +277,17 @@ function removeLibraryItem(libraryId) {
   const data = load();
   data.library = data.library.filter((m) => m.id !== Number(libraryId));
   save(data);
+}
+
+// ライブラリ素材のカテゴリーを変更する
+function updateLibraryItemCategory(libraryId, category) {
+  const data = load();
+  const categories = ensureCategories(data);
+  const item = data.library.find((m) => m.id === Number(libraryId));
+  if (!item) throw new Error('素材が見つかりません');
+  item.category = categories.includes(category) ? category : DEFAULT_LIBRARY_CATEGORY;
+  save(data);
+  return item;
 }
 
 // ライブラリの素材を、指定した会員の動画・画像一覧にコピーする(ライブラリ側は残る)
@@ -443,8 +524,13 @@ module.exports = {
   removeMemberMedia,
   updateMemberMediaNote,
   getLibrary,
+  getLibraryCategories,
+  addLibraryCategory,
+  renameLibraryCategory,
+  deleteLibraryCategory,
   addLibraryItem,
   removeLibraryItem,
+  updateLibraryItemCategory,
   assignLibraryItemToMember,
   getMessagesForMember,
   hasUnreadMessages,

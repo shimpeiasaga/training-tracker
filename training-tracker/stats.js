@@ -120,7 +120,13 @@ const REWARD_MONTHS = 3; // この月数連続達成で特典1回分
 const MAX_MEMBER_MEDIA = 10;
 
 // 素材ライブラリ(会員に配る前の動画・画像の置き場)に登録できる最大件数
-const MAX_LIBRARY_ITEMS = 30;
+const MAX_LIBRARY_ITEMS = 50;
+
+// 素材ライブラリのカテゴリー(管理画面で追加・名前変更・削除できる。実際の一覧はdb側に保存される)
+// この配列は初回起動時の初期値としてのみ使う。「その他」は常に残る固定カテゴリー
+const DEFAULT_LIBRARY_CATEGORIES_SEED = ['上半身', '下半身', '体幹', '有酸素', 'ストレッチ', '呼吸法', 'その他'];
+const DEFAULT_LIBRARY_CATEGORY = 'その他'; // 削除・名前変更できない既定カテゴリー(不正な値のフォールバック先でもある)
+const MAX_LIBRARY_CATEGORIES = 20; // カテゴリーを増やしすぎないための上限
 
 function monthKey(dateStr) {
   return dateStr.slice(0, 7); // "YYYY-MM"
@@ -236,6 +242,9 @@ module.exports = {
   REWARD_MONTHS,
   MAX_MEMBER_MEDIA,
   MAX_LIBRARY_ITEMS,
+  DEFAULT_LIBRARY_CATEGORIES_SEED,
+  DEFAULT_LIBRARY_CATEGORY,
+  MAX_LIBRARY_CATEGORIES,
   monthKey,
   addMonths,
   countForMonth,
