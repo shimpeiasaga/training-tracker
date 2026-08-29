@@ -126,9 +126,9 @@ function libraryListHtml(library, { mode = 'manage', memberId, categories = [] }
     return groups
       .map(
         ([cat, items]) => `
-        <div class="lib-category-group">
-          <div class="lib-category-heading">${escapeHtml(cat)}</div>
-          <div class="lib-pick-list">
+        <details class="lib-category-group">
+          <summary class="lib-category-heading">${escapeHtml(cat)}(${items.length})</summary>
+          <div class="lib-pick-list" style="margin-top:10px;">
             ${items
               .map(
                 (v) => `
@@ -143,7 +143,7 @@ function libraryListHtml(library, { mode = 'manage', memberId, categories = [] }
               )
               .join('')}
           </div>
-        </div>`
+        </details>`
       )
       .join('');
   }
