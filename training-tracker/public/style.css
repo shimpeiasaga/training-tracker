@@ -45,6 +45,54 @@ body {
 }
 .topbar-actions a { font-size: 0.85rem; opacity: 0.95; }
 
+.topbar-settings { position: relative; }
+.topbar-settings summary {
+  cursor: pointer;
+  list-style: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.15);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+}
+.topbar-settings summary::-webkit-details-marker { display: none; }
+.topbar-settings[open] summary { background: rgba(255,255,255,0.3); }
+.topbar-settings-menu {
+  position: absolute;
+  top: 38px;
+  left: 0;
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.18);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 160px;
+  z-index: 30;
+}
+.topbar-settings-menu a,
+.topbar-settings-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 9px 12px;
+  border-radius: 6px;
+  color: var(--text) !important;
+  background: none;
+  border: none;
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-decoration: none !important;
+  opacity: 1;
+}
+.topbar-settings-menu a:hover,
+.topbar-settings-menu button:hover { background: var(--bg); }
+.topbar-settings-menu form { margin: 0; }
+
 .container {
   max-width: 900px;
   margin: 0 auto;
@@ -294,6 +342,17 @@ tr:hover { background: #fafcfa; }
 .btn.primary { background: var(--primary); color: #fff; border: none; }
 .btn.danger { color: var(--danger); border-color: var(--danger); }
 
+.settings-collapse summary { list-style: none; }
+.settings-collapse summary::-webkit-details-marker { display: none; }
+.settings-collapse-menu {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+}
+.settings-collapse-menu form { margin: 0; }
+
 .form-row { margin-bottom: 10px; }
 .form-row label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 4px; }
 .form-row input,
@@ -506,6 +565,8 @@ tr:hover { background: #fafcfa; }
   border-radius: 10px;
   margin-bottom: 8px;
 }
+summary.lib-category-heading { cursor: pointer; user-select: none; }
+summary.lib-category-heading::marker { color: var(--primary); }
 .lib-category-manage-list {
   display: flex;
   flex-direction: column;

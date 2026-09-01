@@ -209,11 +209,21 @@ ${script ? `<script>${script}</script>` : ''}
 </html>`;
 }
 
-function topbar(label, showLogout = true, showSiteTitle = false) {
+function topbar(label, showLogout = true, showSiteTitle = false, settingsMenu = '') {
   return `<div class="topbar">
-    <span class="brand">
-      ${showSiteTitle ? `<span style="display:block;font-size:0.72rem;font-weight:400;opacity:0.85;line-height:1.4;">オンライン運動元気倶楽部</span>` : ''}
-      <span style="display:block;">${label}</span>
+    <span class="brand" style="display:flex;align-items:center;gap:8px;">
+      ${
+        settingsMenu
+          ? `<details class="topbar-settings">
+              <summary title="設定">⚙️</summary>
+              <div class="topbar-settings-menu">${settingsMenu}</div>
+            </details>`
+          : ''
+      }
+      <span>
+        ${showSiteTitle ? `<span style="display:block;font-size:0.72rem;font-weight:400;opacity:0.85;line-height:1.4;">オンライン運動元気倶楽部</span>` : ''}
+        <span style="display:block;">${label}</span>
+      </span>
     </span>
     <div class="topbar-actions">
       <a href="/board">💬 みんなの掲示板</a>
@@ -559,11 +569,10 @@ function memberPage({
       <p style="font-size:0.85rem;color:var(--muted);margin:10px 0 0;">
         ${nextBadge ? `次のバッジ「${nextBadge.icon} ${escapeHtml(nextBadge.label)}」まであと累計${nextBadge.days - totalDays}日` : 'すべてのバッジを獲得しました!すごい継続力です 👑'}
       </p>
-    </div>
-
-    <div class="card">
-      <h3>🎖 ランクアップ履歴</h3>
-      ${badgeLogHtml(badgeLog)}
+      <details class="lib-category-group" style="margin-top:14px;">
+        <summary class="lib-category-heading">🎖 ランクアップ履歴</summary>
+        ${badgeLogHtml(badgeLog)}
+      </details>
     </div>
 
     <div class="card">
@@ -619,10 +628,13 @@ function memberPage({
     </div>
 
     <div class="card">
-      <div style="display:flex;gap:10px;flex-wrap:wrap;">
-        <a class="btn" href="/member/password">🔑 パスワード変更</a>
-        <form method="POST" action="/logout"><button class="btn" type="submit">ログアウト</button></form>
-      </div>
+      <details class="settings-collapse">
+        <summary class="btn">設定</summary>
+        <div class="settings-collapse-menu">
+          <a class="btn" href="/member/password">パスワード変更</a>
+          <form method="POST" action="/logout"><button class="btn" type="submit">ログアウト</button></form>
+        </div>
+      </details>
     </div>`,
   });
 }
@@ -859,11 +871,10 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
     <div class="card">
       <h3>バッジコレクション</h3>
       ${badgeRowHtml(badges)}
-    </div>
-
-    <div class="card">
-      <h3>🎖 ランクアップ履歴</h3>
-      ${badgeLogHtml(badgeLog)}
+      <details class="lib-category-group" style="margin-top:14px;">
+        <summary class="lib-category-heading">🎖 ランクアップ履歴</summary>
+        ${badgeLogHtml(badgeLog)}
+      </details>
     </div>
 
     <div class="card" id="messages">
@@ -1059,7 +1070,7 @@ function boardPage({ posts, userRole, userName, userId, error }) {
 
   return layout({
     title: 'みんなの掲示板 | オンライン運動元気倶楽部',
-    topbar: `<div class="topbar"><span class="brand"><a href="${userRole === 'admin' ? '/admin' : '/member'}">&larr; 戻る</a></span><form method="POST" action="/logout"><button type="submit">ログアウト</button></form></div>`,
+    topbar: `<div class="topbar"><span class="brand"><a href="${userRole === 'admin' ? '/admin' : '/member'}">&larr; 戻る</a></span></div>`,
     body: `
     ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
     <div class="card">
