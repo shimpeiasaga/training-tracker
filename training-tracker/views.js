@@ -224,6 +224,9 @@ ${extraScript ? `<script>${extraScript}</script>` : ''}
 // 送信ボタンを一時的に無効化して「処理中...」に変える(管理画面のページでのみ使用)
 const BUTTON_LOADING_SCRIPT = `
 document.addEventListener('submit', function (e) {
+  // confirm()で「キャンセル」された送信(削除確認など)はここでdefaultPreventedになるので何もしない。
+  // バブリング(通常)フェーズで判定することで、confirm()ダイアログの表示より後に確定させている
+  if (e.defaultPrevented) return;
   var form = e.target;
   if (!(form instanceof HTMLFormElement)) return;
   var btn = form.querySelector('button[type="submit"], button:not([type])');
@@ -231,7 +234,7 @@ document.addEventListener('submit', function (e) {
   btn.disabled = true;
   btn.dataset.originalText = btn.textContent;
   btn.textContent = '処理中...';
-}, true);
+});
 `;
 
 // 会員TOPページ専用: 下に引っ張って更新するジェスチャー(プルアンドフレッシュ)
@@ -285,8 +288,8 @@ function adminTopbar(label, backHref = '') {
   return `<div class="topbar">
     <span class="brand">${backHref ? `<a href="${backHref}">&larr; ${escapeHtml(label)}</a>` : escapeHtml(label)}</span>
     <div class="topbar-actions">
-      ${ADMIN_REFRESH_BTN}
       <a href="/board">💬 みんなの掲示板</a>
+      ${ADMIN_REFRESH_BTN}
       <form method="POST" action="/logout"><button type="submit">ログアウト</button></form>
     </div>
   </div>`;
@@ -618,14 +621,11 @@ function memberPage({
   const script = `
     ${celebrate ? confettiScript(rewardCelebrate) : ''}`;
 
-  // ランクアップ時のメッセージは管理画面で文言をカスタマイズできる({icon}/{label}/{days}を置き換える)
+  // ランクアップ時のメッセージ: 基本の文言は固定、管理画面で入力した一言があれば下に追加表示する(プレースホルダー等の入力は不要)
   const milestoneMessageHtml = milestoneBadge
-    ? rankUpMessageTemplate
-      ? escapeHtml(rankUpMessageTemplate)
-          .replace(/\{icon\}/g, milestoneBadge.icon)
-          .replace(/\{label\}/g, escapeHtml(milestoneBadge.label))
-          .replace(/\{days\}/g, milestoneBadge.days)
-      : `${milestoneBadge.icon} バッジ「${escapeHtml(milestoneBadge.label)}」を獲得しました!<div class="sub">累計${milestoneBadge.days}日達成です、この調子!</div>`
+    ? `${milestoneBadge.icon} バッジ「${escapeHtml(milestoneBadge.label)}」を獲得しました!<div class="sub">累計${milestoneBadge.days}日達成です、この調子!${
+        rankUpMessageTemplate ? `<br>${escapeHtml(rankUpMessageTemplate)}` : ''
+      }</div>`
     : '';
 
   const celebrateBanner = celebrate
@@ -859,13 +859,12 @@ function adminPage({ members, teamWeekly, ranked, error, message, unreadMembers 
     <div class="card">
       <h3>🎉 ランクアップ時のお祝いメッセージ</h3>
       <p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">
-        会員がバッジ(ランク)を新しく獲得した時に表示されるお祝いメッセージの文言です。空欄にすると標準の文言に戻ります。<br>
-        使える置き換え文字: <code>{icon}</code>(バッジのアイコン)、<code>{label}</code>(バッジ名)、<code>{days}</code>(累計日数)
+        会員がバッジ(ランク)を新しく獲得した時のお祝い画面に、一言メッセージを追加できます。ここに入力した言葉がそのまま追加で表示されます(空欄なら追加なし)。
       </p>
       <form method="POST" action="/admin/settings/rank-up-message" class="inline-form">
         <div class="form-row">
-          <label>メッセージ文言</label>
-          <input type="text" name="rankUpMessage" maxlength="200" value="${escapeHtml(rankUpMessage)}" placeholder="例: {icon} バッジ「{label}」獲得!累計{days}日達成おめでとうございます!">
+          <label>追加する一言</label>
+          <input type="text" name="rankUpMessage" maxlength="100" value="${escapeHtml(rankUpMessage)}" placeholder="例: よく頑張りました!この調子で続けましょう">
         </div>
         <button class="btn primary" type="submit">保存</button>
       </form>
