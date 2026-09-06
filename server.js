@@ -18,6 +18,9 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const MIME = { '.css': 'text/css', '.js': 'application/javascript', '.json': 'application/json', '.png': 'image/png' };
 const STATIC_PATHS = new Set(['/style.css', '/manifest.json', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png']);
 
+// 自動バックアップを1日1回だけ確認するためのプロセス内キャッシュ(毎リクエストDBに問い合わせないようにする)
+let lastBackupCheckDate = null;
+
 // 初回起動時に管理者アカウントがなければ自動で作る
 // (Renderなどshellが使えないホスティング環境でも、npm run seedを手動実行しなくて済むように)
 async function ensureDefaultAdmin() {
@@ -61,12 +64,14 @@ function resolveViewMonth(url) {
 }
 
 // 今月のチェック回数で会員をランキングする(同点は同順位)
-async function computeMonthlyRanking() {
-  const members = await db.getAllMembers();
+// useDisplayName=trueの時は会員が自分で設定した表示名を使う(会員画面向け)。管理画面では常に本名を使う
+async function computeMonthlyRanking(useDisplayName = false) {
+  const members = (await db.getAllMembers()).filter((m) => !m.excludeFromRanking);
   const list = await Promise.all(
     members.map(async (m) => {
       const checkins = (await db.getCheckinsForUser(m.id)).map((c) => c.date);
-      return { id: m.id, name: m.name, count: stats.currentMonthCount(checkins) };
+      const name = useDisplayName && m.displayName ? m.displayName : m.name;
+      return { id: m.id, name, count: stats.currentMonthCount(checkins) };
     })
   );
   return stats.rankMembers(list);
@@ -129,12 +134,26 @@ const server = http.createServer(async (req, res) => {
     return redirect(res, '/login');
   }
 
+  // 1日1回、まだ今日分のバックアップが無ければ自動で取っておく(手動ダウンロードを忘れても大丈夫にするため)。
+  // 毎リクエストDBに問い合わせると全体が遅くなるので、プロセス内で「今日は確認済み」を覚えておき、
+  // かつレスポンスを待たせないようバックグラウンドで実行する
+  const today = stats.todayStr();
+  if (lastBackupCheckDate !== today) {
+    lastBackupCheckDate = today;
+    db.ensureDailyBackup().catch(() => {
+      // 自動バックアップに失敗しても通常の利用は止めない(次のアクセスで再度試みる)
+      lastBackupCheckDate = null;
+    });
+  }
+
   if (method === 'GET' && pathname === '/') {
     return redirect(res, user.role === 'admin' ? '/admin' : '/member');
   }
 
   // --- 会員ページ ---
   if (pathname === '/member' && method === 'GET') {
+    const memberUser = await db.getUserById(user.id);
+    const settings = await db.getSettings();
     const checkinRecords = await db.getCheckinsForUser(user.id);
     const checkins = checkinRecords.map((c) => c.date);
     const today = stats.todayStr();
@@ -152,7 +171,8 @@ const server = http.createServer(async (req, res) => {
       200,
       views.memberPage({
         hasUnreadMessages,
-        userName: user.name,
+        userName: (memberUser && memberUser.displayName) || user.name,
+        rankUpMessages: settings.rankUpMessages,
         today,
         checkedToday: checkins.includes(today),
         streak,
@@ -170,7 +190,7 @@ const server = http.createServer(async (req, res) => {
         rewardMonths: stats.REWARD_MONTHS,
         badges: stats.streakBadges(totalDays),
         nextBadge: stats.nextStreakBadge(totalDays),
-        ranked: await computeMonthlyRanking(),
+        ranked: await computeMonthlyRanking(true),
         userId: user.id,
         celebrate,
         milestoneBadge: celebrate ? stats.justUnlockedBadge(totalDays) : null,
@@ -196,7 +216,7 @@ const server = http.createServer(async (req, res) => {
         createdAt: stats.nowStr(),
       });
     }
-    return redirect(res, '/member#messages');
+    return redirect(res, '/member');
   }
 
   let memberMsgDeleteMatch = pathname.match(/^\/member\/messages\/(\d+)\/delete$/);
@@ -207,7 +227,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(403);
       return res.end('権限がありません');
     }
-    return redirect(res, '/member#messages');
+    return redirect(res, '/member');
   }
 
   // --- 会員向け掲示板(誰でも投稿できる、返信できるのは管理者のみ) ---
@@ -291,7 +311,7 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       // チェックインが存在しない日付を指定された場合などは何もせず戻る
     }
-    return redirect(res, '/member#history');
+    return redirect(res, '/member');
   }
 
   if (pathname === '/member/password' && method === 'GET') {
@@ -313,6 +333,16 @@ const server = http.createServer(async (req, res) => {
       return redirect(res, '/member/password?message=' + encodeURIComponent('パスワードを変更しました'));
     }
     return redirect(res, '/member/password?error=' + encodeURIComponent('パスワードは4文字以上にしてください'));
+  }
+
+  // 会員が自分で表示名を変更する(会員画面にのみ反映、管理画面の氏名表示は変わらない)
+  if (pathname === '/member/display-name' && method === 'POST') {
+    const body = await parseBody(req);
+    const displayName = (body.displayName || '').trim();
+    if (displayName) {
+      await db.updateUserDisplayName(user.id, displayName);
+    }
+    return redirect(res, '/member');
   }
 
   // --- 管理者ページ ---
@@ -352,22 +382,17 @@ const server = http.createServer(async (req, res) => {
           };
         })
       );
-      const allCheckins = (await db.getAllCheckins()).map((c) => c.date);
-      const memberCount = members.length || 1;
-      const teamWeekly = stats.weeklySeries(allCheckins, 8).map((w) => ({
-        weekStart: w.weekStart,
-        avg: Math.round((w.count / memberCount) * 10) / 10,
-      }));
       return sendHtml(
         res,
         200,
         views.adminPage({
           members,
-          teamWeekly,
           unreadMembers: await db.getMembersWithUnreadMessages(),
           ranked: await computeMonthlyRanking(),
           error: url.searchParams.get('error'),
           message: url.searchParams.get('message'),
+          rankUpMessages: (await db.getSettings()).rankUpMessages,
+          backups: await db.listBackups(),
         })
       );
     }
@@ -406,6 +431,14 @@ const server = http.createServer(async (req, res) => {
       return redirect(res, '/admin?error=' + encodeURIComponent('パスワードは4文字以上にしてください'));
     }
 
+    // ランキングに表示するかどうかを切り替える(スタッフのテスト用アカウントなどを外すため)
+    match = pathname.match(/^\/admin\/members\/(\d+)\/exclude-ranking$/);
+    if (match && method === 'POST') {
+      const body = await parseBody(req);
+      await db.setMemberRankingExcluded(match[1], body.excluded === '1');
+      return redirect(res, `/admin/member/${match[1]}`);
+    }
+
     match = pathname.match(/^\/admin\/members\/(\d+)\/reward$/);
     if (match && method === 'POST') {
       await db.incrementRewardsGiven(match[1]);
@@ -425,7 +458,7 @@ const server = http.createServer(async (req, res) => {
           createdAt: stats.nowStr(),
         });
       }
-      return redirect(res, `/admin/member/${match[1]}#messages`);
+      return redirect(res, `/admin/member/${match[1]}`);
     }
 
     match = pathname.match(/^\/admin\/members\/(\d+)\/messages\/(\d+)\/delete$/);
@@ -436,7 +469,7 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(403);
         return res.end('権限がありません');
       }
-      return redirect(res, `/admin/member/${match[1]}#messages`);
+      return redirect(res, `/admin/member/${match[1]}`);
     }
 
     match = pathname.match(/^\/admin\/members\/(\d+)\/media\/video$/);
@@ -449,10 +482,10 @@ const server = http.createServer(async (req, res) => {
         try {
           await db.addMemberMedia(match[1], { type: 'video', title, url: videoUrl, note, createdAt: stats.nowStr() });
         } catch (err) {
-          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message)}#video`);
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message)}`);
         }
       }
-      return redirect(res, `/admin/member/${match[1]}#video`);
+      return redirect(res, `/admin/member/${match[1]}`);
     }
 
     match = pathname.match(/^\/admin\/members\/(\d+)\/media\/image$/);
@@ -466,15 +499,15 @@ const server = http.createServer(async (req, res) => {
         const note = (fields.note || '').trim();
         const file = files.image;
         if (!title || !file || !file.content || !file.content.length) {
-          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('タイトルと画像ファイルを指定してください')}#video`);
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('タイトルと画像ファイルを指定してください')}`);
         }
         if (file.content.length > MAX_IMAGE_BYTES) {
-          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('画像は5MBまでです')}#video`);
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('画像は5MBまでです')}`);
         }
         const ext = (file.filename.split('.').pop() || '').toLowerCase();
         const mimeType = ALLOWED_TYPES[file.contentType] ? file.contentType : EXT_TYPE[ext];
         if (!mimeType) {
-          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('対応していない画像形式です(jpg/png/webp/gifのみ)')}#video`);
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('対応していない画像形式です(jpg/png/webp/gifのみ)')}`);
         }
         await db.addMemberMedia(match[1], {
           type: 'image',
@@ -485,15 +518,45 @@ const server = http.createServer(async (req, res) => {
           createdAt: stats.nowStr(),
         });
       } catch (err) {
-        return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message || '画像の登録に失敗しました')}#video`);
+        return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message || '画像の登録に失敗しました')}`);
       }
-      return redirect(res, `/admin/member/${match[1]}#video`);
+      return redirect(res, `/admin/member/${match[1]}`);
+    }
+
+    match = pathname.match(/^\/admin\/members\/(\d+)\/media\/html$/);
+    if (match && method === 'POST') {
+      const MAX_HTML_BYTES = 500 * 1024; // 500KB(呼吸法ツールなどの自己完結HTML想定)
+      try {
+        const { fields, files } = await parseMultipart(req);
+        const title = (fields.title || '').trim();
+        const file = files.htmlFile;
+        if (!title || !file || !file.content || !file.content.length) {
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('タイトルとHTMLファイルを指定してください')}`);
+        }
+        if (file.content.length > MAX_HTML_BYTES) {
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('HTMLファイルは500KBまでです')}`);
+        }
+        const ext = (file.filename.split('.').pop() || '').toLowerCase();
+        if (ext !== 'html' && ext !== 'htm') {
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('.htmlファイルのみアップロードできます')}`);
+        }
+        await db.addMemberMedia(match[1], {
+          type: 'html',
+          title,
+          htmlContent: file.content.toString('utf8'),
+          note: (fields.note || '').trim(),
+          createdAt: stats.nowStr(),
+        });
+      } catch (err) {
+        return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message || 'HTMLツールの登録に失敗しました')}`);
+      }
+      return redirect(res, `/admin/member/${match[1]}`);
     }
 
     match = pathname.match(/^\/admin\/members\/(\d+)\/media\/(\d+)\/delete$/);
     if (match && method === 'POST') {
       await db.removeMemberMedia(match[1], match[2]);
-      return redirect(res, `/admin/member/${match[1]}#video`);
+      return redirect(res, `/admin/member/${match[1]}`);
     }
 
     match = pathname.match(/^\/admin\/members\/(\d+)\/media\/(\d+)\/note$/);
@@ -505,7 +568,32 @@ const server = http.createServer(async (req, res) => {
       } catch (err) {
         // 対象が見つからない場合などは何もせず戻る
       }
-      return redirect(res, `/admin/member/${match[1]}#video`);
+      return redirect(res, `/admin/member/${match[1]}`);
+    }
+
+    // 会員が選ぶ専用トレーニング一覧の表示順を1つ上/下に入れ替える
+    match = pathname.match(/^\/admin\/members\/(\d+)\/media\/(\d+)\/move$/);
+    if (match && method === 'POST') {
+      const body = await parseBody(req);
+      const direction = body.direction === 'up' ? 'up' : 'down';
+      try {
+        await db.moveMemberMedia(match[1], match[2], direction);
+      } catch (err) {
+        // 対象が見つからない場合などは何もせず戻る
+      }
+      return redirect(res, `/admin/member/${match[1]}`);
+    }
+
+    // ランクアップ時のお祝いメッセージの文言をバッジごとに設定する
+    if (pathname === '/admin/settings/rank-up-message' && method === 'POST') {
+      const body = await parseBody(req);
+      const rankUpMessages = {};
+      stats.STREAK_BADGES.forEach((b) => {
+        const val = (body[`rankUpMessage_${b.days}`] || '').trim();
+        if (val) rankUpMessages[b.days] = val;
+      });
+      await db.updateSettings({ rankUpMessages });
+      return redirect(res, '/admin?message=' + encodeURIComponent('お祝いメッセージを保存しました'));
     }
 
     // --- 素材ライブラリ(会員に配る前の動画・画像をまとめて置いておく場所) ---
@@ -515,18 +603,50 @@ const server = http.createServer(async (req, res) => {
         200,
         views.adminLibraryPage({
           library: await db.getLibrary(),
+          categories: await db.getLibraryCategories(),
           error: url.searchParams.get('error'),
         })
       );
+    }
+
+    if (pathname === '/admin/library/categories/add' && method === 'POST') {
+      const body = await parseBody(req);
+      try {
+        await db.addLibraryCategory(body.name);
+      } catch (err) {
+        return redirect(res, `/admin/library?error=${encodeURIComponent(err.message)}`);
+      }
+      return redirect(res, '/admin/library');
+    }
+
+    if (pathname === '/admin/library/categories/rename' && method === 'POST') {
+      const body = await parseBody(req);
+      try {
+        await db.renameLibraryCategory(body.oldName, body.newName);
+      } catch (err) {
+        return redirect(res, `/admin/library?error=${encodeURIComponent(err.message)}`);
+      }
+      return redirect(res, '/admin/library');
+    }
+
+    if (pathname === '/admin/library/categories/delete' && method === 'POST') {
+      const body = await parseBody(req);
+      try {
+        await db.deleteLibraryCategory(body.name);
+      } catch (err) {
+        return redirect(res, `/admin/library?error=${encodeURIComponent(err.message)}`);
+      }
+      return redirect(res, '/admin/library');
     }
 
     if (pathname === '/admin/library/video' && method === 'POST') {
       const body = await parseBody(req);
       const title = (body.title || '').trim();
       const videoUrl = (body.url || '').trim();
+      const category = (body.category || '').trim();
       if (title && videoUrl) {
         try {
-          await db.addLibraryItem({ type: 'video', title, url: videoUrl, createdAt: stats.nowStr() });
+          await db.addLibraryItem({ type: 'video', title, url: videoUrl, category, createdAt: stats.nowStr() });
         } catch (err) {
           return redirect(res, `/admin/library?error=${encodeURIComponent(err.message)}`);
         }
@@ -558,10 +678,40 @@ const server = http.createServer(async (req, res) => {
           title,
           imageData: file.content.toString('base64'),
           mimeType,
+          category: (fields.category || '').trim(),
           createdAt: stats.nowStr(),
         });
       } catch (err) {
         return redirect(res, `/admin/library?error=${encodeURIComponent(err.message || '画像の登録に失敗しました')}`);
+      }
+      return redirect(res, '/admin/library');
+    }
+
+    if (pathname === '/admin/library/html' && method === 'POST') {
+      const MAX_HTML_BYTES = 500 * 1024; // 500KB(呼吸法ツールなどの自己完結HTML想定)
+      try {
+        const { fields, files } = await parseMultipart(req);
+        const title = (fields.title || '').trim();
+        const file = files.htmlFile;
+        if (!title || !file || !file.content || !file.content.length) {
+          return redirect(res, `/admin/library?error=${encodeURIComponent('タイトルとHTMLファイルを指定してください')}`);
+        }
+        if (file.content.length > MAX_HTML_BYTES) {
+          return redirect(res, `/admin/library?error=${encodeURIComponent('HTMLファイルは500KBまでです')}`);
+        }
+        const ext = (file.filename.split('.').pop() || '').toLowerCase();
+        if (ext !== 'html' && ext !== 'htm') {
+          return redirect(res, `/admin/library?error=${encodeURIComponent('.htmlファイルのみアップロードできます')}`);
+        }
+        await db.addLibraryItem({
+          type: 'html',
+          title,
+          htmlContent: file.content.toString('utf8'),
+          category: (fields.category || '').trim(),
+          createdAt: stats.nowStr(),
+        });
+      } catch (err) {
+        return redirect(res, `/admin/library?error=${encodeURIComponent(err.message || 'HTMLツールの登録に失敗しました')}`);
       }
       return redirect(res, '/admin/library');
     }
@@ -572,6 +722,17 @@ const server = http.createServer(async (req, res) => {
       return redirect(res, '/admin/library');
     }
 
+    match = pathname.match(/^\/admin\/library\/(\d+)\/category$/);
+    if (match && method === 'POST') {
+      const body = await parseBody(req);
+      try {
+        await db.updateLibraryItemCategory(match[1], (body.category || '').trim());
+      } catch (err) {
+        return redirect(res, `/admin/library?error=${encodeURIComponent(err.message || 'カテゴリーの変更に失敗しました')}`);
+      }
+      return redirect(res, '/admin/library');
+    }
+
     match = pathname.match(/^\/admin\/members\/(\d+)\/media\/from-library\/(\d+)$/);
     if (match && method === 'POST') {
       const body = await parseBody(req);
@@ -579,9 +740,9 @@ const server = http.createServer(async (req, res) => {
       try {
         await db.assignLibraryItemToMember(match[1], match[2], note, stats.nowStr());
       } catch (err) {
-        return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message)}#video`);
+        return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message)}`);
       }
-      return redirect(res, `/admin/member/${match[1]}#video`);
+      return redirect(res, `/admin/member/${match[1]}`);
     }
 
     if (pathname === '/admin/backup' && method === 'GET') {
@@ -594,18 +755,22 @@ const server = http.createServer(async (req, res) => {
       return res.end(raw);
     }
 
-    if (pathname === '/admin/restore' && method === 'POST') {
-      try {
-        const { files } = await parseMultipart(req);
-        const file = files.backupFile;
-        if (!file || !file.content || !file.content.length) {
-          return redirect(res, '/admin?error=' + encodeURIComponent('復元するファイルを選択してください'));
-        }
-        await db.importRaw(file.content.toString('utf8'));
-        return redirect(res, '/admin?message=' + encodeURIComponent('バックアップからデータを復元しました'));
-      } catch (err) {
-        return redirect(res, '/admin?error=' + encodeURIComponent('復元に失敗しました。ファイルの形式を確認してください'));
+    // 自動で取っておいた過去のバックアップをダウンロードする
+    match = pathname.match(/^\/admin\/backups\/(\d+)$/);
+    if (match && method === 'GET') {
+      const raw = await db.getBackupRaw(match[1]);
+      if (!raw) {
+        res.writeHead(404);
+        return res.end('バックアップが見つかりません');
       }
+      const backups = await db.listBackups();
+      const found = backups.find((b) => String(b.id) === match[1]);
+      const filename = `training-tracker-backup-${(found && found.date) || stats.todayStr()}.json`;
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+      });
+      return res.end(raw);
     }
 
     match = pathname.match(/^\/admin\/member\/(\d+)$/);
@@ -654,6 +819,7 @@ const server = http.createServer(async (req, res) => {
           messages: adminViewMessages,
           media: await db.getMediaForMember(member.id),
           library: await db.getLibrary(),
+          categories: await db.getLibraryCategories(),
           videoError: url.searchParams.get('error'),
         })
       );
