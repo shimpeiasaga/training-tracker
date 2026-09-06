@@ -243,11 +243,19 @@ document.addEventListener('submit', function (e) {
 // ボタンを押して画面が更新されても、押す前のスクロール位置をできるだけ保つ(ページが上に戻ってしまうのを防ぐ)
 const SCROLL_RESTORE_SCRIPT = `
 (function () {
+  if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
   var key = 'scrollY_' + location.pathname;
   var savedY = sessionStorage.getItem(key);
   if (savedY !== null) {
-    window.scrollTo(0, parseInt(savedY, 10));
     sessionStorage.removeItem(key);
+    var y = parseInt(savedY, 10);
+    var restore = function () { window.scrollTo(0, y); };
+    // URLの#video等に対するブラウザ標準のジャンプより後に効かせるため、複数タイミングで上書きする
+    restore();
+    requestAnimationFrame(restore);
+    setTimeout(restore, 0);
+    setTimeout(restore, 150);
+    window.addEventListener('load', restore);
   }
   document.addEventListener('submit', function (e) {
     if (e.defaultPrevented) return;
