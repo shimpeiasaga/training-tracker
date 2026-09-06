@@ -61,12 +61,14 @@ function resolveViewMonth(url) {
 }
 
 // 今月のチェック回数で会員をランキングする(同点は同順位)
-async function computeMonthlyRanking() {
+// useDisplayName=trueの時は会員が自分で設定した表示名を使う(会員画面向け)。管理画面では常に本名を使う
+async function computeMonthlyRanking(useDisplayName = false) {
   const members = await db.getAllMembers();
   const list = await Promise.all(
     members.map(async (m) => {
       const checkins = (await db.getCheckinsForUser(m.id)).map((c) => c.date);
-      return { id: m.id, name: m.name, count: stats.currentMonthCount(checkins) };
+      const name = useDisplayName && m.displayName ? m.displayName : m.name;
+      return { id: m.id, name, count: stats.currentMonthCount(checkins) };
     })
   );
   return stats.rankMembers(list);
@@ -155,7 +157,7 @@ const server = http.createServer(async (req, res) => {
       views.memberPage({
         hasUnreadMessages,
         userName: (memberUser && memberUser.displayName) || user.name,
-        rankUpMessageTemplate: settings.rankUpMessage,
+        rankUpMessages: settings.rankUpMessages,
         today,
         checkedToday: checkins.includes(today),
         streak,
@@ -173,7 +175,7 @@ const server = http.createServer(async (req, res) => {
         rewardMonths: stats.REWARD_MONTHS,
         badges: stats.streakBadges(totalDays),
         nextBadge: stats.nextStreakBadge(totalDays),
-        ranked: await computeMonthlyRanking(),
+        ranked: await computeMonthlyRanking(true),
         userId: user.id,
         celebrate,
         milestoneBadge: celebrate ? stats.justUnlockedBadge(totalDays) : null,
@@ -381,7 +383,7 @@ const server = http.createServer(async (req, res) => {
           ranked: await computeMonthlyRanking(),
           error: url.searchParams.get('error'),
           message: url.searchParams.get('message'),
-          rankUpMessage: (await db.getSettings()).rankUpMessage,
+          rankUpMessages: (await db.getSettings()).rankUpMessages,
         })
       );
     }
@@ -565,10 +567,15 @@ const server = http.createServer(async (req, res) => {
       return redirect(res, `/admin/member/${match[1]}#video`);
     }
 
-    // ランクアップ時のお祝いメッセージの文言を設定する
+    // ランクアップ時のお祝いメッセージの文言をバッジごとに設定する
     if (pathname === '/admin/settings/rank-up-message' && method === 'POST') {
       const body = await parseBody(req);
-      await db.updateSettings({ rankUpMessage: (body.rankUpMessage || '').trim() });
+      const rankUpMessages = {};
+      stats.STREAK_BADGES.forEach((b) => {
+        const val = (body[`rankUpMessage_${b.days}`] || '').trim();
+        if (val) rankUpMessages[b.days] = val;
+      });
+      await db.updateSettings({ rankUpMessages });
       return redirect(res, '/admin?message=' + encodeURIComponent('お祝いメッセージを保存しました'));
     }
 

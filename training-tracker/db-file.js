@@ -21,7 +21,7 @@ function ensureDataFile() {
           sessions: [],
           media: [],
           library: [],
-          settings: { rankUpMessage: '' },
+          settings: { rankUpMessages: {} },
           nextUserId: 1,
           nextCheckinId: 1,
           nextMessageId: 1,
@@ -47,7 +47,7 @@ function load() {
   if (!Array.isArray(data.media)) data.media = [];
   if (!Array.isArray(data.library)) data.library = [];
   if (!data.settings || typeof data.settings !== 'object') data.settings = {};
-  if (typeof data.settings.rankUpMessage !== 'string') data.settings.rankUpMessage = '';
+  if (!data.settings.rankUpMessages || typeof data.settings.rankUpMessages !== 'object') data.settings.rankUpMessages = {};
   if (typeof data.nextMessageId !== 'number') data.nextMessageId = 1;
   if (typeof data.nextPostId !== 'number') data.nextPostId = 1;
   if (typeof data.nextReplyId !== 'number') data.nextReplyId = 1;

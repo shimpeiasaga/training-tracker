@@ -166,7 +166,7 @@ async function updateUserDisplayName(id, displayName) {
 async function getSettings() {
   const db = await getDb();
   const doc = await db.collection('settings').findOne({ _id: 'global' });
-  return { rankUpMessage: (doc && doc.rankUpMessage) || '' };
+  return { rankUpMessages: (doc && doc.rankUpMessages) || {} };
 }
 
 async function updateSettings(patch) {

@@ -1,5 +1,5 @@
 // HTMLをテンプレートエンジンなしで生成する(外部依存なし)
-const { MONTHLY_GOAL, REWARD_MONTHS, MAX_MEMBER_MEDIA, MAX_LIBRARY_ITEMS, DEFAULT_LIBRARY_CATEGORY, MAX_LIBRARY_CATEGORIES } = require('./stats');
+const { MONTHLY_GOAL, REWARD_MONTHS, MAX_MEMBER_MEDIA, MAX_LIBRARY_ITEMS, DEFAULT_LIBRARY_CATEGORY, MAX_LIBRARY_CATEGORIES, STREAK_BADGES } = require('./stats');
 const CHART_JS = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js';
 
 function escapeHtml(str) {
@@ -215,13 +215,16 @@ ${topbar}
 ${body}
 </div>
 ${script ? `<script>${script}</script>` : ''}
+<script>${BUTTON_LOADING_SCRIPT}</script>
+<script>${SCROLL_RESTORE_SCRIPT}</script>
 ${extraScript ? `<script>${extraScript}</script>` : ''}
 </body>
 </html>`;
 }
 
-// 管理画面のボタンを押した直後、通信のラグで「押せているか分からない」状態を防ぐため、
-// 送信ボタンを一時的に無効化して「処理中...」に変える(管理画面のページでのみ使用)
+// ボタンを押した直後、通信のラグで「押せているか分からない」状態を防ぐため、
+// 送信ボタンを一時的に無効化してテキストを変える(全ページ共通)。
+// メッセージ送信系のボタン(文言が「送信」)だけは「送信中...」、それ以外は「処理中...」にする
 const BUTTON_LOADING_SCRIPT = `
 document.addEventListener('submit', function (e) {
   // confirm()で「キャンセル」された送信(削除確認など)はここでdefaultPreventedになるので何もしない。
@@ -233,8 +236,24 @@ document.addEventListener('submit', function (e) {
   if (!btn || btn.disabled) return;
   btn.disabled = true;
   btn.dataset.originalText = btn.textContent;
-  btn.textContent = '処理中...';
+  btn.textContent = btn.textContent.trim() === '送信' ? '送信中...' : '処理中...';
 });
+`;
+
+// ボタンを押して画面が更新されても、押す前のスクロール位置をできるだけ保つ(ページが上に戻ってしまうのを防ぐ)
+const SCROLL_RESTORE_SCRIPT = `
+(function () {
+  var key = 'scrollY_' + location.pathname;
+  var savedY = sessionStorage.getItem(key);
+  if (savedY !== null) {
+    window.scrollTo(0, parseInt(savedY, 10));
+    sessionStorage.removeItem(key);
+  }
+  document.addEventListener('submit', function (e) {
+    if (e.defaultPrevented) return;
+    sessionStorage.setItem(key, window.scrollY);
+  });
+})();
 `;
 
 // 会員TOPページ専用: 下に引っ張って更新するジェスチャー(プルアンドフレッシュ)
@@ -616,12 +635,13 @@ function memberPage({
   messages,
   media,
   hasUnreadMessages,
-  rankUpMessageTemplate = '',
+  rankUpMessages = {},
 }) {
   const script = `
     ${celebrate ? confettiScript(rewardCelebrate) : ''}`;
 
-  // ランクアップ時のメッセージ: 基本の文言は固定、管理画面で入力した一言があれば下に追加表示する(プレースホルダー等の入力は不要)
+  // ランクアップ時のメッセージ: 基本の文言は固定、バッジごとに管理画面で入力した一言があれば下に追加表示する
+  const rankUpMessageTemplate = milestoneBadge ? rankUpMessages[milestoneBadge.days] || '' : '';
   const milestoneMessageHtml = milestoneBadge
     ? `${milestoneBadge.icon} バッジ「${escapeHtml(milestoneBadge.label)}」を獲得しました!<div class="sub">累計${milestoneBadge.days}日達成です、この調子!${
         rankUpMessageTemplate ? `<br>${escapeHtml(rankUpMessageTemplate)}` : ''
@@ -761,7 +781,7 @@ function memberPasswordPage({ userName, error, message }) {
   });
 }
 
-function adminPage({ members, teamWeekly, ranked, error, message, unreadMembers = [], rankUpMessage = '' }) {
+function adminPage({ members, teamWeekly, ranked, error, message, unreadMembers = [], rankUpMessages = {} }) {
   const rows = members
     .map(
       (m) => `
@@ -807,7 +827,6 @@ function adminPage({ members, teamWeekly, ranked, error, message, unreadMembers 
     title: '管理者ダッシュボード | オンライン運動元気倶楽部',
     topbar: adminTopbar('管理者ダッシュボード'),
     script,
-    extraScript: BUTTON_LOADING_SCRIPT,
     body: `
     ${
       unreadMembers.length
@@ -859,13 +878,16 @@ function adminPage({ members, teamWeekly, ranked, error, message, unreadMembers 
     <div class="card">
       <h3>🎉 ランクアップ時のお祝いメッセージ</h3>
       <p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">
-        会員がバッジ(ランク)を新しく獲得した時のお祝い画面に、一言メッセージを追加できます。ここに入力した言葉がそのまま追加で表示されます(空欄なら追加なし)。
+        会員がバッジ(ランク)を新しく獲得した時のお祝い画面に、バッジごとに一言メッセージを追加できます。ここに入力した言葉がそのまま追加で表示されます(空欄ならそのバッジには追加なし)。
       </p>
       <form method="POST" action="/admin/settings/rank-up-message" class="inline-form">
+        ${STREAK_BADGES.map(
+          (b) => `
         <div class="form-row">
-          <label>追加する一言</label>
-          <input type="text" name="rankUpMessage" maxlength="100" value="${escapeHtml(rankUpMessage)}" placeholder="例: よく頑張りました!この調子で続けましょう">
-        </div>
+          <label>${b.icon} ${escapeHtml(b.label)}(${b.days}日)</label>
+          <input type="text" name="rankUpMessage_${b.days}" maxlength="100" value="${escapeHtml(rankUpMessages[b.days] || '')}" placeholder="例: よく頑張りました!この調子で続けましょう">
+        </div>`
+        ).join('')}
         <button class="btn primary" type="submit">保存</button>
       </form>
     </div>
@@ -907,7 +929,6 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
     title: `${escapeHtml(member.name)} の詳細 | オンライン運動元気倶楽部`,
     topbar: adminTopbar('管理者ダッシュボード', '/admin'),
     script,
-    extraScript: BUTTON_LOADING_SCRIPT,
     body: `
     ${hadUnreadMessages ? `<a href="#messages" class="notice-banner">📩 ${escapeHtml(member.name)}さんから新着メッセージがあります</a>` : ''}
     <div class="card">
@@ -1081,7 +1102,6 @@ function adminLibraryPage({ library, categories = [], error }) {
   return layout({
     title: '素材ライブラリ | オンライン運動元気倶楽部',
     topbar: adminTopbar('管理者ダッシュボード', '/admin'),
-    extraScript: BUTTON_LOADING_SCRIPT,
     body: `
     ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
 
