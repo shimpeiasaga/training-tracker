@@ -218,6 +218,7 @@ ${body}
 ${script ? `<script>${script}</script>` : ''}
 <script>${BUTTON_LOADING_SCRIPT}</script>
 <script>${SCROLL_RESTORE_SCRIPT}</script>
+<script>${MESSAGE_SCROLL_SCRIPT}</script>
 ${extraScript ? `<script>${extraScript}</script>` : ''}
 </body>
 </html>`;
@@ -285,6 +286,21 @@ const SCROLL_RESTORE_SCRIPT = `
     if (e.defaultPrevented) return;
     sessionStorage.setItem(key, window.scrollY);
   });
+})();
+`;
+
+// メッセージ欄(.msg-thread)は開いた時点で最新のメッセージが見えるよう、常に一番下にスクロールしておく。
+// 過去のメッセージは、その枠内を上にスクロールすれば見られる(ページ全体のスクロールとは別)
+const MESSAGE_SCROLL_SCRIPT = `
+(function () {
+  function scrollThreadsToBottom() {
+    document.querySelectorAll('.msg-thread').forEach(function (el) {
+      el.scrollTop = el.scrollHeight;
+    });
+  }
+  scrollThreadsToBottom();
+  requestAnimationFrame(scrollThreadsToBottom);
+  window.addEventListener('load', scrollThreadsToBottom);
 })();
 `;
 
