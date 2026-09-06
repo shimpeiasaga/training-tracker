@@ -135,6 +135,8 @@ const server = http.createServer(async (req, res) => {
 
   // --- 会員ページ ---
   if (pathname === '/member' && method === 'GET') {
+    const memberUser = await db.getUserById(user.id);
+    const settings = await db.getSettings();
     const checkinRecords = await db.getCheckinsForUser(user.id);
     const checkins = checkinRecords.map((c) => c.date);
     const today = stats.todayStr();
@@ -152,7 +154,8 @@ const server = http.createServer(async (req, res) => {
       200,
       views.memberPage({
         hasUnreadMessages,
-        userName: user.name,
+        userName: (memberUser && memberUser.displayName) || user.name,
+        rankUpMessageTemplate: settings.rankUpMessage,
         today,
         checkedToday: checkins.includes(today),
         streak,
@@ -315,6 +318,16 @@ const server = http.createServer(async (req, res) => {
     return redirect(res, '/member/password?error=' + encodeURIComponent('パスワードは4文字以上にしてください'));
   }
 
+  // 会員が自分で表示名を変更する(会員画面にのみ反映、管理画面の氏名表示は変わらない)
+  if (pathname === '/member/display-name' && method === 'POST') {
+    const body = await parseBody(req);
+    const displayName = (body.displayName || '').trim();
+    if (displayName) {
+      await db.updateUserDisplayName(user.id, displayName);
+    }
+    return redirect(res, '/member');
+  }
+
   // --- 管理者ページ ---
   if (pathname.startsWith('/admin')) {
     if (user.role !== 'admin') {
@@ -368,6 +381,7 @@ const server = http.createServer(async (req, res) => {
           ranked: await computeMonthlyRanking(),
           error: url.searchParams.get('error'),
           message: url.searchParams.get('message'),
+          rankUpMessage: (await db.getSettings()).rankUpMessage,
         })
       );
     }
@@ -536,6 +550,26 @@ const server = http.createServer(async (req, res) => {
         // 対象が見つからない場合などは何もせず戻る
       }
       return redirect(res, `/admin/member/${match[1]}#video`);
+    }
+
+    // 会員が選ぶ専用トレーニング一覧の表示順を1つ上/下に入れ替える
+    match = pathname.match(/^\/admin\/members\/(\d+)\/media\/(\d+)\/move$/);
+    if (match && method === 'POST') {
+      const body = await parseBody(req);
+      const direction = body.direction === 'up' ? 'up' : 'down';
+      try {
+        await db.moveMemberMedia(match[1], match[2], direction);
+      } catch (err) {
+        // 対象が見つからない場合などは何もせず戻る
+      }
+      return redirect(res, `/admin/member/${match[1]}#video`);
+    }
+
+    // ランクアップ時のお祝いメッセージの文言を設定する
+    if (pathname === '/admin/settings/rank-up-message' && method === 'POST') {
+      const body = await parseBody(req);
+      await db.updateSettings({ rankUpMessage: (body.rankUpMessage || '').trim() });
+      return redirect(res, '/admin?message=' + encodeURIComponent('お祝いメッセージを保存しました'));
     }
 
     // --- 素材ライブラリ(会員に配る前の動画・画像をまとめて置いておく場所) ---

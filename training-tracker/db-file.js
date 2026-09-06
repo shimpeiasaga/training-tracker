@@ -21,6 +21,7 @@ function ensureDataFile() {
           sessions: [],
           media: [],
           library: [],
+          settings: { rankUpMessage: '' },
           nextUserId: 1,
           nextCheckinId: 1,
           nextMessageId: 1,
@@ -45,6 +46,8 @@ function load() {
   if (!Array.isArray(data.sessions)) data.sessions = [];
   if (!Array.isArray(data.media)) data.media = [];
   if (!Array.isArray(data.library)) data.library = [];
+  if (!data.settings || typeof data.settings !== 'object') data.settings = {};
+  if (typeof data.settings.rankUpMessage !== 'string') data.settings.rankUpMessage = '';
   if (typeof data.nextMessageId !== 'number') data.nextMessageId = 1;
   if (typeof data.nextPostId !== 'number') data.nextPostId = 1;
   if (typeof data.nextReplyId !== 'number') data.nextReplyId = 1;
@@ -148,11 +151,36 @@ function updateUserPassword(id, passwordHash) {
   return user;
 }
 
+// 会員が自分で設定できる表示名(会員画面にだけ反映、管理画面の氏名表示には影響しない)
+function updateUserDisplayName(id, displayName) {
+  const data = load();
+  const user = data.users.find((u) => u.id === Number(id));
+  if (user) {
+    user.displayName = displayName;
+    save(data);
+  }
+  return user;
+}
+
+// --- アプリ全体の設定(現時点ではランクアップ時のお祝いメッセージのみ) ---
+function getSettings() {
+  return { ...load().settings };
+}
+
+function updateSettings(patch) {
+  const data = load();
+  data.settings = { ...data.settings, ...patch };
+  save(data);
+  return { ...data.settings };
+}
+
 // 会員ごとの動画・画像(合わせて最大MAX_MEMBER_MEDIA件、独立した一覧として保存する)
+// sortOrderが無い古いデータはidをそのまま並び順として使う(見た目の順番は変わらない)
 function getMediaForMember(memberId) {
   return load()
     .media.filter((m) => m.memberId === Number(memberId))
-    .sort((a, b) => a.id - b.id);
+    .map((m) => ({ ...m, sortOrder: m.sortOrder != null ? m.sortOrder : m.id }))
+    .sort((a, b) => a.sortOrder - b.sortOrder);
 }
 
 function addMemberMedia(memberId, { type, title, url, imageData, mimeType, htmlContent, note, createdAt }) {
@@ -163,7 +191,8 @@ function addMemberMedia(memberId, { type, title, url, imageData, mimeType, htmlC
   if (existing.length >= MAX_MEMBER_MEDIA) {
     throw new Error(`動画・画像は合わせて最大${MAX_MEMBER_MEDIA}件までです`);
   }
-  const item = { id: data.nextMediaId++, memberId: Number(memberId), type, title, url, imageData, mimeType, htmlContent, note, createdAt };
+  const id = data.nextMediaId++;
+  const item = { id, memberId: Number(memberId), type, title, url, imageData, mimeType, htmlContent, note, createdAt, sortOrder: id };
   data.media.push(item);
   save(data);
   return item;
@@ -172,6 +201,29 @@ function addMemberMedia(memberId, { type, title, url, imageData, mimeType, htmlC
 function removeMemberMedia(memberId, mediaId) {
   const data = load();
   data.media = data.media.filter((m) => !(m.id === Number(mediaId) && m.memberId === Number(memberId)));
+  save(data);
+}
+
+// 会員の動画・画像一覧の表示順を1つ上/下に入れ替える(direction: 'up' | 'down')
+function moveMemberMedia(memberId, mediaId, direction) {
+  const data = load();
+  const items = data.media
+    .filter((m) => m.memberId === Number(memberId))
+    .map((m) => {
+      if (m.sortOrder == null) m.sortOrder = m.id;
+      return m;
+    })
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+  const idx = items.findIndex((m) => m.id === Number(mediaId));
+  if (idx === -1) throw new Error('動画・画像が見つかりません');
+  const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+  if (swapIdx < 0 || swapIdx >= items.length) {
+    save(data); // sortOrderの補完(初回のみ)を保存しておく
+    return;
+  }
+  const tmp = items[idx].sortOrder;
+  items[idx].sortOrder = items[swapIdx].sortOrder;
+  items[swapIdx].sortOrder = tmp;
   save(data);
 }
 
@@ -511,6 +563,7 @@ module.exports = {
   getAllMembers,
   createUser,
   updateUserPassword,
+  updateUserDisplayName,
   deleteUser,
   getCheckinsForUser,
   hasCheckinForDate,
@@ -522,7 +575,10 @@ module.exports = {
   getMediaForMember,
   addMemberMedia,
   removeMemberMedia,
+  moveMemberMedia,
   updateMemberMediaNote,
+  getSettings,
+  updateSettings,
   getLibrary,
   getLibraryCategories,
   addLibraryCategory,

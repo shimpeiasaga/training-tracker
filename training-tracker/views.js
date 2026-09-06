@@ -60,9 +60,19 @@ function mediaListHtml(media, { deletable = false, memberId } = {}) {
           <h4>${CIRCLED_NUMS[i] || i + 1} ${escapeHtml(v.title)}</h4>
           ${
             deletable
-              ? `<form method="POST" action="/admin/members/${memberId}/media/${v.id}/delete" onsubmit="return confirm('削除しますか?');">
-                  <button class="btn danger" type="submit">削除</button>
-                </form>`
+              ? `<div class="video-item-actions">
+                  <form method="POST" action="/admin/members/${memberId}/media/${v.id}/move" style="display:inline;">
+                    <input type="hidden" name="direction" value="up">
+                    <button class="btn" type="submit" title="上に移動" ${i === 0 ? 'disabled' : ''}>▲</button>
+                  </form>
+                  <form method="POST" action="/admin/members/${memberId}/media/${v.id}/move" style="display:inline;">
+                    <input type="hidden" name="direction" value="down">
+                    <button class="btn" type="submit" title="下に移動" ${i === media.length - 1 ? 'disabled' : ''}>▼</button>
+                  </form>
+                  <form method="POST" action="/admin/members/${memberId}/media/${v.id}/delete" onsubmit="return confirm('削除しますか?');" style="display:inline;">
+                    <button class="btn danger" type="submit">削除</button>
+                  </form>
+                </div>`
               : ''
           }
         </div>
@@ -183,7 +193,7 @@ function libraryListHtml(library, { mode = 'manage', memberId, categories = [] }
     .join('');
 }
 
-function layout({ title, body, script = '', topbar = '' }) {
+function layout({ title, body, script = '', topbar = '', extraScript = '' }) {
   return `<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -205,8 +215,81 @@ ${topbar}
 ${body}
 </div>
 ${script ? `<script>${script}</script>` : ''}
+${extraScript ? `<script>${extraScript}</script>` : ''}
 </body>
 </html>`;
+}
+
+// 管理画面のボタンを押した直後、通信のラグで「押せているか分からない」状態を防ぐため、
+// 送信ボタンを一時的に無効化して「処理中...」に変える(管理画面のページでのみ使用)
+const BUTTON_LOADING_SCRIPT = `
+document.addEventListener('submit', function (e) {
+  var form = e.target;
+  if (!(form instanceof HTMLFormElement)) return;
+  var btn = form.querySelector('button[type="submit"], button:not([type])');
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  btn.dataset.originalText = btn.textContent;
+  btn.textContent = '処理中...';
+}, true);
+`;
+
+// 会員TOPページ専用: 下に引っ張って更新するジェスチャー(プルアンドフレッシュ)
+const PULL_TO_REFRESH_SCRIPT = `
+(function () {
+  var threshold = 70;
+  var pulling = false;
+  var startY = 0;
+  var indicator = document.createElement('div');
+  indicator.className = 'ptr-indicator';
+  indicator.textContent = '↓ 引っ張って更新';
+  document.body.insertBefore(indicator, document.body.firstChild);
+  document.addEventListener('touchstart', function (e) {
+    if (window.scrollY === 0) {
+      startY = e.touches[0].clientY;
+      pulling = true;
+    }
+  }, { passive: true });
+  document.addEventListener('touchmove', function (e) {
+    if (!pulling) return;
+    var diff = e.touches[0].clientY - startY;
+    if (diff > 0 && window.scrollY === 0) {
+      var pull = Math.min(diff, 100);
+      indicator.style.height = pull + 'px';
+      indicator.style.opacity = Math.min(pull / threshold, 1);
+      indicator.textContent = pull > threshold ? '↑ 離して更新' : '↓ 引っ張って更新';
+    } else {
+      pulling = false;
+    }
+  }, { passive: true });
+  document.addEventListener('touchend', function () {
+    if (!pulling) return;
+    pulling = false;
+    var height = parseInt(indicator.style.height || '0', 10);
+    if (height > threshold) {
+      indicator.textContent = '更新中...';
+      indicator.style.height = '40px';
+      indicator.style.opacity = '1';
+      location.reload();
+    } else {
+      indicator.style.height = '0px';
+      indicator.style.opacity = '0';
+    }
+  }, { passive: true });
+})();
+`;
+
+// 管理画面の共通トップバー(更新ボタン付き)。backHrefを指定すると「← ラベル」のリンクになる
+const ADMIN_REFRESH_BTN = `<button type="button" class="btn" onclick="location.reload()" title="最新の情報に更新します">🔄 更新</button>`;
+function adminTopbar(label, backHref = '') {
+  return `<div class="topbar">
+    <span class="brand">${backHref ? `<a href="${backHref}">&larr; ${escapeHtml(label)}</a>` : escapeHtml(label)}</span>
+    <div class="topbar-actions">
+      ${ADMIN_REFRESH_BTN}
+      <a href="/board">💬 みんなの掲示板</a>
+      <form method="POST" action="/logout"><button type="submit">ログアウト</button></form>
+    </div>
+  </div>`;
 }
 
 function topbar(label, showLogout = true, showSiteTitle = false, settingsMenu = '') {
@@ -530,9 +613,20 @@ function memberPage({
   messages,
   media,
   hasUnreadMessages,
+  rankUpMessageTemplate = '',
 }) {
   const script = `
     ${celebrate ? confettiScript(rewardCelebrate) : ''}`;
+
+  // ランクアップ時のメッセージは管理画面で文言をカスタマイズできる({icon}/{label}/{days}を置き換える)
+  const milestoneMessageHtml = milestoneBadge
+    ? rankUpMessageTemplate
+      ? escapeHtml(rankUpMessageTemplate)
+          .replace(/\{icon\}/g, milestoneBadge.icon)
+          .replace(/\{label\}/g, escapeHtml(milestoneBadge.label))
+          .replace(/\{days\}/g, milestoneBadge.days)
+      : `${milestoneBadge.icon} バッジ「${escapeHtml(milestoneBadge.label)}」を獲得しました!<div class="sub">累計${milestoneBadge.days}日達成です、この調子!</div>`
+    : '';
 
   const celebrateBanner = celebrate
     ? `<div class="celebrate-banner ${rewardCelebrate ? 'reward' : ''}">
@@ -540,7 +634,7 @@ function memberPage({
           rewardCelebrate
             ? `🎁 特典ゲット!<div class="sub">月${MONTHLY_GOAL}回を${REWARD_MONTHS}ヶ月連続で達成しました。管理者に伝えて特典を受け取ってください!</div>`
             : milestoneBadge
-            ? `${milestoneBadge.icon} バッジ「${escapeHtml(milestoneBadge.label)}」を獲得しました!<div class="sub">累計${milestoneBadge.days}日達成です、この調子!</div>`
+            ? milestoneMessageHtml
             : `🎉 今日もチェック完了!<div class="sub">連続${streak}日目、いい調子です</div>`
         }
       </div>`
@@ -554,6 +648,7 @@ function memberPage({
     title: 'マイページ | オンライン運動元気倶楽部',
     topbar: topbar(`${escapeHtml(userName)} さん`, false, true),
     script,
+    extraScript: PULL_TO_REFRESH_SCRIPT,
     body: `
     ${unreadBanner}
     ${celebrateBanner}
@@ -631,6 +726,13 @@ function memberPage({
       <details class="settings-collapse">
         <summary class="btn">設定</summary>
         <div class="settings-collapse-menu">
+          <form method="POST" action="/member/display-name" class="inline-form" style="margin:0;">
+            <div class="form-row">
+              <label>表示名</label>
+              <input type="text" name="displayName" maxlength="20" value="${escapeHtml(userName)}" required>
+            </div>
+            <button class="btn" type="submit">表示名を保存</button>
+          </form>
           <a class="btn" href="/member/password">パスワード変更</a>
           <form method="POST" action="/logout"><button class="btn" type="submit">ログアウト</button></form>
         </div>
@@ -659,7 +761,7 @@ function memberPasswordPage({ userName, error, message }) {
   });
 }
 
-function adminPage({ members, teamWeekly, ranked, error, message, unreadMembers = [] }) {
+function adminPage({ members, teamWeekly, ranked, error, message, unreadMembers = [], rankUpMessage = '' }) {
   const rows = members
     .map(
       (m) => `
@@ -703,8 +805,9 @@ function adminPage({ members, teamWeekly, ranked, error, message, unreadMembers 
 
   return layout({
     title: '管理者ダッシュボード | オンライン運動元気倶楽部',
-    topbar: topbar('管理者ダッシュボード'),
+    topbar: adminTopbar('管理者ダッシュボード'),
     script,
+    extraScript: BUTTON_LOADING_SCRIPT,
     body: `
     ${
       unreadMembers.length
@@ -754,6 +857,21 @@ function adminPage({ members, teamWeekly, ranked, error, message, unreadMembers 
     </div>
 
     <div class="card">
+      <h3>🎉 ランクアップ時のお祝いメッセージ</h3>
+      <p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">
+        会員がバッジ(ランク)を新しく獲得した時に表示されるお祝いメッセージの文言です。空欄にすると標準の文言に戻ります。<br>
+        使える置き換え文字: <code>{icon}</code>(バッジのアイコン)、<code>{label}</code>(バッジ名)、<code>{days}</code>(累計日数)
+      </p>
+      <form method="POST" action="/admin/settings/rank-up-message" class="inline-form">
+        <div class="form-row">
+          <label>メッセージ文言</label>
+          <input type="text" name="rankUpMessage" maxlength="200" value="${escapeHtml(rankUpMessage)}" placeholder="例: {icon} バッジ「{label}」獲得!累計{days}日達成おめでとうございます!">
+        </div>
+        <button class="btn primary" type="submit">保存</button>
+      </form>
+    </div>
+
+    <div class="card">
       <h3>データのバックアップ / 復元</h3>
       <p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">
         無料ホスティングではデータが消えることがあるため、時々バックアップのダウンロードをおすすめします。
@@ -788,8 +906,9 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
 
   return layout({
     title: `${escapeHtml(member.name)} の詳細 | オンライン運動元気倶楽部`,
-    topbar: `<div class="topbar"><span class="brand"><a href="/admin">&larr; 管理者ダッシュボード</a></span><div class="topbar-actions"><a href="/board">💬 みんなの掲示板</a><form method="POST" action="/logout"><button type="submit">ログアウト</button></form></div></div>`,
+    topbar: adminTopbar('管理者ダッシュボード', '/admin'),
     script,
+    extraScript: BUTTON_LOADING_SCRIPT,
     body: `
     ${hadUnreadMessages ? `<a href="#messages" class="notice-banner">📩 ${escapeHtml(member.name)}さんから新着メッセージがあります</a>` : ''}
     <div class="card">
@@ -962,7 +1081,8 @@ function categoryManageCardHtml(categories) {
 function adminLibraryPage({ library, categories = [], error }) {
   return layout({
     title: '素材ライブラリ | オンライン運動元気倶楽部',
-    topbar: `<div class="topbar"><span class="brand"><a href="/admin">&larr; 管理者ダッシュボード</a></span><div class="topbar-actions"><a href="/board">💬 みんなの掲示板</a><form method="POST" action="/logout"><button type="submit">ログアウト</button></form></div></div>`,
+    topbar: adminTopbar('管理者ダッシュボード', '/admin'),
+    extraScript: BUTTON_LOADING_SCRIPT,
     body: `
     ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
 

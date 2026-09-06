@@ -103,6 +103,7 @@ function mapUser(doc) {
   return {
     id: doc._id,
     name: doc.name,
+    displayName: doc.displayName || '',
     username: doc.username,
     passwordHash: doc.passwordHash,
     role: doc.role,
@@ -154,6 +155,26 @@ async function updateUserPassword(id, passwordHash) {
   return getUserById(id);
 }
 
+// 会員が自分で設定できる表示名(会員画面にだけ反映、管理画面の氏名表示には影響しない)
+async function updateUserDisplayName(id, displayName) {
+  const db = await getDb();
+  await db.collection('users').updateOne({ _id: Number(id) }, { $set: { displayName } });
+  return getUserById(id);
+}
+
+// --- アプリ全体の設定(現時点ではランクアップ時のお祝いメッセージのみ) ---
+async function getSettings() {
+  const db = await getDb();
+  const doc = await db.collection('settings').findOne({ _id: 'global' });
+  return { rankUpMessage: (doc && doc.rankUpMessage) || '' };
+}
+
+async function updateSettings(patch) {
+  const db = await getDb();
+  await db.collection('settings').updateOne({ _id: 'global' }, { $set: patch }, { upsert: true });
+  return getSettings();
+}
+
 // 会員ごとの動画・画像(合わせて最大MAX_MEMBER_MEDIA件、独立したコレクションとして保存する)
 function mapMedia(doc) {
   if (!doc) return undefined;
@@ -168,9 +189,11 @@ function mapMedia(doc) {
     htmlContent: doc.htmlContent,
     note: doc.note || '',
     createdAt: doc.createdAt,
+    sortOrder: doc.sortOrder != null ? doc.sortOrder : doc._id,
   };
 }
 
+// sortOrderが無い古いデータはidをそのまま並び順として使う(見た目の順番は変わらない)
 async function getMediaForMember(memberId) {
   const db = await getDb();
   const docs = await db
@@ -178,7 +201,7 @@ async function getMediaForMember(memberId) {
     .find({ memberId: Number(memberId) })
     .sort({ _id: 1 })
     .toArray();
-  return docs.map(mapMedia);
+  return docs.map(mapMedia).sort((a, b) => a.sortOrder - b.sortOrder);
 }
 
 async function addMemberMedia(memberId, { type, title, url, imageData, mimeType, htmlContent, note, createdAt }) {
@@ -190,7 +213,7 @@ async function addMemberMedia(memberId, { type, title, url, imageData, mimeType,
     throw new Error(`動画・画像は合わせて最大${MAX_MEMBER_MEDIA}件までです`);
   }
   const id = await nextSeq('media');
-  const doc = { _id: id, memberId: Number(memberId), type, title, url, imageData, mimeType, htmlContent, note, createdAt };
+  const doc = { _id: id, memberId: Number(memberId), type, title, url, imageData, mimeType, htmlContent, note, createdAt, sortOrder: id };
   await db.collection('media').insertOne(doc);
   return mapMedia(doc);
 }
@@ -198,6 +221,21 @@ async function addMemberMedia(memberId, { type, title, url, imageData, mimeType,
 async function removeMemberMedia(memberId, mediaId) {
   const db = await getDb();
   await db.collection('media').deleteOne({ _id: Number(mediaId), memberId: Number(memberId) });
+}
+
+// 会員の動画・画像一覧の表示順を1つ上/下に入れ替える(direction: 'up' | 'down')
+async function moveMemberMedia(memberId, mediaId, direction) {
+  const db = await getDb();
+  const docs = await db.collection('media').find({ memberId: Number(memberId) }).sort({ _id: 1 }).toArray();
+  const items = docs.map(mapMedia).sort((a, b) => a.sortOrder - b.sortOrder);
+  const idx = items.findIndex((m) => m.id === Number(mediaId));
+  if (idx === -1) throw new Error('動画・画像が見つかりません');
+  const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+  if (swapIdx < 0 || swapIdx >= items.length) return;
+  const a = items[idx];
+  const b = items[swapIdx];
+  await db.collection('media').updateOne({ _id: a.id }, { $set: { sortOrder: b.sortOrder } });
+  await db.collection('media').updateOne({ _id: b.id }, { $set: { sortOrder: a.sortOrder } });
 }
 
 // 動画・画像のセット数・回数メモを後から編集する(管理者のみ)
@@ -725,6 +763,7 @@ module.exports = {
   getAllMembers,
   createUser,
   updateUserPassword,
+  updateUserDisplayName,
   deleteUser,
   getCheckinsForUser,
   hasCheckinForDate,
@@ -736,7 +775,10 @@ module.exports = {
   getMediaForMember,
   addMemberMedia,
   removeMemberMedia,
+  moveMemberMedia,
   updateMemberMediaNote,
+  getSettings,
+  updateSettings,
   getLibrary,
   getLibraryCategories,
   addLibraryCategory,

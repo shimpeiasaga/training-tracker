@@ -514,6 +514,23 @@ tr:hover { background: #fafcfa; }
   border-radius: 10px;
 }
 .video-item-head form { margin: 0; }
+.video-item-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.video-item-actions button { padding: 4px 10px; }
+.video-item-actions button:disabled { opacity: 0.35; cursor: default; }
+
+/* 会員TOPページ: プルアンドフレッシュ(下に引っ張って更新)の表示部分 */
+.ptr-indicator {
+  height: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  color: var(--muted);
+  background: var(--bg);
+  opacity: 0;
+  transition: height 0.15s ease, opacity 0.15s ease;
+}
 .video-embed {
   position: relative;
   width: 100%;
