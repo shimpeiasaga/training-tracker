@@ -549,7 +549,7 @@ function getBackupRaw(id) {
 
 // 1日1回、まだ今日のバックアップが無ければ自動で作成する(会員・管理者どちらかがアクセスした時に呼ばれる)
 // 古いものは自動で削除し、件数が増えすぎないようにする
-function ensureDailyBackup() {
+async function ensureDailyBackup() {
   const data = load();
   const today = todayStr();
   const already = data.backups.some((b) => b.date === today);

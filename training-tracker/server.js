@@ -18,6 +18,9 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const MIME = { '.css': 'text/css', '.js': 'application/javascript', '.json': 'application/json', '.png': 'image/png' };
 const STATIC_PATHS = new Set(['/style.css', '/manifest.json', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png']);
 
+// 自動バックアップを1日1回だけ確認するためのプロセス内キャッシュ(毎リクエストDBに問い合わせないようにする)
+let lastBackupCheckDate = null;
+
 // 初回起動時に管理者アカウントがなければ自動で作る
 // (Renderなどshellが使えないホスティング環境でも、npm run seedを手動実行しなくて済むように)
 async function ensureDefaultAdmin() {
@@ -60,18 +63,32 @@ function resolveViewMonth(url) {
   return current;
 }
 
-// 今月のチェック回数で会員をランキングする(同点は同順位)
-// useDisplayName=trueの時は会員が自分で設定した表示名を使う(会員画面向け)。管理画面では常に本名を使う
-async function computeMonthlyRanking(useDisplayName = false) {
-  const members = (await db.getAllMembers()).filter((m) => !m.excludeFromRanking);
-  const list = await Promise.all(
-    members.map(async (m) => {
-      const checkins = (await db.getCheckinsForUser(m.id)).map((c) => c.date);
-      const name = useDisplayName && m.displayName ? m.displayName : m.name;
-      return { id: m.id, name, count: stats.currentMonthCount(checkins) };
-    })
+// 会員全員と、それぞれのチェックイン履歴をまとめて取得する(1回のDB往復で済ませ、進捗表・ランキングなどで使い回す)
+async function getMembersWithCheckins() {
+  const allMembers = await db.getAllMembers();
+  return Promise.all(
+    allMembers.map(async (m) => ({
+      ...m,
+      checkins: (await db.getCheckinsForUser(m.id)).map((c) => c.date),
+    }))
   );
+}
+
+// 今月のチェック回数で会員をランキングする(同点は同順位)。すでに取得済みのmembersWithCheckinsがあれば使い回す
+// useDisplayName=trueの時は会員が自分で設定した表示名を使う(会員画面向け)。管理画面では常に本名を使う
+function rankFromMembers(membersWithCheckins, useDisplayName = false) {
+  const list = membersWithCheckins
+    .filter((m) => !m.excludeFromRanking)
+    .map((m) => ({
+      id: m.id,
+      name: useDisplayName && m.displayName ? m.displayName : m.name,
+      count: stats.currentMonthCount(m.checkins),
+    }));
   return stats.rankMembers(list);
+}
+
+async function computeMonthlyRanking(useDisplayName = false) {
+  return rankFromMembers(await getMembersWithCheckins(), useDisplayName);
 }
 
 function serveStatic(req, res, pathname) {
@@ -131,11 +148,16 @@ const server = http.createServer(async (req, res) => {
     return redirect(res, '/login');
   }
 
-  // 1日1回、まだ今日分のバックアップが無ければ自動で取っておく(手動ダウンロードを忘れても大丈夫にするため)
-  try {
-    await db.ensureDailyBackup();
-  } catch (err) {
-    // 自動バックアップに失敗しても通常の利用は止めない
+  // 1日1回、まだ今日分のバックアップが無ければ自動で取っておく(手動ダウンロードを忘れても大丈夫にするため)。
+  // 毎リクエストDBに問い合わせると全体が遅くなるので、プロセス内で「今日は確認済み」を覚えておき、
+  // かつレスポンスを待たせないようバックグラウンドで実行する
+  const today = stats.todayStr();
+  if (lastBackupCheckDate !== today) {
+    lastBackupCheckDate = today;
+    db.ensureDailyBackup().catch(() => {
+      // 自動バックアップに失敗しても通常の利用は止めない(次のアクセスで再度試みる)
+      lastBackupCheckDate = null;
+    });
   }
 
   if (method === 'GET' && pathname === '/') {
@@ -144,9 +166,16 @@ const server = http.createServer(async (req, res) => {
 
   // --- 会員ページ ---
   if (pathname === '/member' && method === 'GET') {
-    const memberUser = await db.getUserById(user.id);
-    const settings = await db.getSettings();
-    const checkinRecords = await db.getCheckinsForUser(user.id);
+    // 互いに関係ない読み込みはまとめて並行実行する(1つずつ順番に待つと遅くなるため)
+    const [memberUser, settings, checkinRecords, hasUnreadMessages, memberMessages, ranked, media] = await Promise.all([
+      db.getUserById(user.id),
+      db.getSettings(),
+      db.getCheckinsForUser(user.id),
+      db.hasUnreadMessages(user.id, 'member'),
+      db.getMessagesForMember(user.id),
+      computeMonthlyRanking(true),
+      db.getMediaForMember(user.id),
+    ]);
     const checkins = checkinRecords.map((c) => c.date);
     const today = stats.todayStr();
     const streak = stats.currentStreak(checkins);
@@ -155,8 +184,6 @@ const server = http.createServer(async (req, res) => {
     const rewardCelebrate = celebrate && url.searchParams.get('reward') === '1';
     const viewMonth = resolveViewMonth(url);
     const currentMonth = stats.monthKey(today);
-    const hasUnreadMessages = await db.hasUnreadMessages(user.id, 'member');
-    const memberMessages = await db.getMessagesForMember(user.id);
     if (hasUnreadMessages) await db.markMessagesRead(user.id, 'member');
     return sendHtml(
       res,
@@ -182,7 +209,7 @@ const server = http.createServer(async (req, res) => {
         rewardMonths: stats.REWARD_MONTHS,
         badges: stats.streakBadges(totalDays),
         nextBadge: stats.nextStreakBadge(totalDays),
-        ranked: await computeMonthlyRanking(true),
+        ranked,
         userId: user.id,
         celebrate,
         milestoneBadge: celebrate ? stats.justUnlockedBadge(totalDays) : null,
@@ -191,7 +218,7 @@ const server = http.createServer(async (req, res) => {
         checkinRecords,
         badgeLog: stats.badgeUnlockLog(checkins),
         messages: memberMessages,
-        media: await db.getMediaForMember(user.id),
+        media,
       })
     );
   }
@@ -345,46 +372,50 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/admin' && method === 'GET') {
-      const allMembers = await db.getAllMembers();
-      const members = await Promise.all(
-        allMembers.map(async (m) => {
-          const checkins = (await db.getCheckinsForUser(m.id)).map((c) => c.date);
-          const streak = stats.currentStreak(checkins);
-          const monthlyStreak = stats.currentMonthlyStreak(checkins);
-          const earned = stats.rewardsEarned(monthlyStreak);
-          const given = m.rewardsGiven || 0;
-          const unlockedBadges = stats.streakBadges(checkins.length).filter((b) => b.achieved);
-          const topBadge = unlockedBadges.length ? unlockedBadges[unlockedBadges.length - 1] : null;
-          return {
-            id: m.id,
-            name: m.name,
-            username: m.username,
-            streak,
-            weekCount: stats.thisWeekCount(checkins),
-            total: checkins.length,
-            lastDate: checkins.length ? checkins[checkins.length - 1] : null,
-            monthCount: stats.currentMonthCount(checkins),
-            monthGoal: stats.MONTHLY_GOAL,
-            monthlyStreak,
-            rewardsEarned: earned,
-            rewardsGiven: given,
-            rewardsPending: Math.max(0, earned - given),
-            badgeIcon: topBadge ? topBadge.icon : null,
-            badgeLabel: topBadge ? topBadge.label : null,
-          };
-        })
-      );
+      // 会員+チェックイン履歴は1回だけ取得して、進捗表とランキングの両方で使い回す(重複取得しない)
+      const [membersWithCheckins, unreadMembers, settings, backups] = await Promise.all([
+        getMembersWithCheckins(),
+        db.getMembersWithUnreadMessages(),
+        db.getSettings(),
+        db.listBackups(),
+      ]);
+      const members = membersWithCheckins.map((m) => {
+        const checkins = m.checkins;
+        const streak = stats.currentStreak(checkins);
+        const monthlyStreak = stats.currentMonthlyStreak(checkins);
+        const earned = stats.rewardsEarned(monthlyStreak);
+        const given = m.rewardsGiven || 0;
+        const unlockedBadges = stats.streakBadges(checkins.length).filter((b) => b.achieved);
+        const topBadge = unlockedBadges.length ? unlockedBadges[unlockedBadges.length - 1] : null;
+        return {
+          id: m.id,
+          name: m.name,
+          username: m.username,
+          streak,
+          weekCount: stats.thisWeekCount(checkins),
+          total: checkins.length,
+          lastDate: checkins.length ? checkins[checkins.length - 1] : null,
+          monthCount: stats.currentMonthCount(checkins),
+          monthGoal: stats.MONTHLY_GOAL,
+          monthlyStreak,
+          rewardsEarned: earned,
+          rewardsGiven: given,
+          rewardsPending: Math.max(0, earned - given),
+          badgeIcon: topBadge ? topBadge.icon : null,
+          badgeLabel: topBadge ? topBadge.label : null,
+        };
+      });
       return sendHtml(
         res,
         200,
         views.adminPage({
           members,
-          unreadMembers: await db.getMembersWithUnreadMessages(),
-          ranked: await computeMonthlyRanking(),
+          unreadMembers,
+          ranked: rankFromMembers(membersWithCheckins),
           error: url.searchParams.get('error'),
           message: url.searchParams.get('message'),
-          rankUpMessages: (await db.getSettings()).rankUpMessages,
-          backups: await db.listBackups(),
+          rankUpMessages: settings.rankUpMessages,
+          backups,
         })
       );
     }
@@ -772,7 +803,15 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(404);
         return res.end('会員が見つかりません');
       }
-      const checkinRecords = await db.getCheckinsForUser(member.id);
+      // 互いに関係ない読み込みはまとめて並行実行する(1つずつ順番に待つと遅くなるため)
+      const [checkinRecords, hadUnreadMessages, adminViewMessages, media, library, categories] = await Promise.all([
+        db.getCheckinsForUser(member.id),
+        db.hasUnreadMessages(member.id, 'admin'),
+        db.getMessagesForMember(member.id),
+        db.getMediaForMember(member.id),
+        db.getLibrary(),
+        db.getLibraryCategories(),
+      ]);
       const checkins = checkinRecords.map((c) => c.date);
       const memberStreak = stats.currentStreak(checkins);
       const monthlyStreak = stats.currentMonthlyStreak(checkins);
@@ -780,8 +819,6 @@ const server = http.createServer(async (req, res) => {
       const given = member.rewardsGiven || 0;
       const viewMonth = resolveViewMonth(url);
       const currentMonth = stats.monthKey(stats.todayStr());
-      const hadUnreadMessages = await db.hasUnreadMessages(member.id, 'admin');
-      const adminViewMessages = await db.getMessagesForMember(member.id);
       if (hadUnreadMessages) await db.markMessagesRead(member.id, 'admin');
       return sendHtml(
         res,
@@ -809,9 +846,9 @@ const server = http.createServer(async (req, res) => {
           checkinRecords,
           badgeLog: stats.badgeUnlockLog(checkins),
           messages: adminViewMessages,
-          media: await db.getMediaForMember(member.id),
-          library: await db.getLibrary(),
-          categories: await db.getLibraryCategories(),
+          media,
+          library,
+          categories,
           videoError: url.searchParams.get('error'),
         })
       );
