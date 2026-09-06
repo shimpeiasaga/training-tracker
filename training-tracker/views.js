@@ -238,6 +238,23 @@ document.addEventListener('submit', function (e) {
   btn.dataset.originalText = btn.textContent;
   btn.textContent = btn.textContent.trim() === '送信' ? '送信中...' : '処理中...';
 });
+
+// フォームの送信ボタン以外(「詳細」などリンクの<a class="btn">、更新ボタンなど)も
+// クリック直後に見た目を変えて「押せている」ことが分かるようにする
+document.addEventListener('click', function (e) {
+  var link = e.target.closest('a.btn');
+  if (!link || link.target === '_blank' || link.dataset.loading === '1') return;
+  link.dataset.loading = '1';
+  var original = link.textContent;
+  link.style.opacity = '0.6';
+  link.textContent = '読み込み中...';
+  // ダウンロードリンクなどページ移動が起きないケースのために、少し経ったら元に戻す
+  setTimeout(function () {
+    link.style.opacity = '';
+    link.textContent = original;
+    link.dataset.loading = '';
+  }, 4000);
+}, true);
 `;
 
 // ボタンを押して画面が更新されても、押す前のスクロール位置をできるだけ保つ(ページが上に戻ってしまうのを防ぐ)
@@ -310,7 +327,7 @@ const PULL_TO_REFRESH_SCRIPT = `
 `;
 
 // 管理画面の共通トップバー(更新ボタン付き)。backHrefを指定すると「← ラベル」のリンクになる
-const ADMIN_REFRESH_BTN = `<button type="button" class="btn" onclick="location.reload()" title="最新の情報に更新します">🔄 更新</button>`;
+const ADMIN_REFRESH_BTN = `<button type="button" class="btn" onclick="this.disabled=true;this.textContent='更新中...';location.reload();" title="最新の情報に更新します">🔄 更新</button>`;
 function adminTopbar(label, backHref = '') {
   return `<div class="topbar">
     <span class="brand">${backHref ? `<a href="${backHref}">&larr; ${escapeHtml(label)}</a>` : escapeHtml(label)}</span>
@@ -789,7 +806,7 @@ function memberPasswordPage({ userName, error, message }) {
   });
 }
 
-function adminPage({ members, teamWeekly, ranked, error, message, unreadMembers = [], rankUpMessages = {} }) {
+function adminPage({ members, ranked, error, message, unreadMembers = [], rankUpMessages = {}, backups = [] }) {
   const rows = members
     .map(
       (m) => `
@@ -820,21 +837,9 @@ function adminPage({ members, teamWeekly, ranked, error, message, unreadMembers 
     )
     .join('');
 
-  const script = `
-    const teamWeekly = ${JSON.stringify(teamWeekly)};
-    new Chart(document.getElementById('teamChart'), {
-      type: 'line',
-      data: {
-        labels: teamWeekly.map(w => w.weekStart),
-        datasets: [{ label: '会員1人あたり週平均実施回数', data: teamWeekly.map(w => w.avg), borderColor: '#1d4ed8', backgroundColor: 'rgba(29,78,216,0.15)', fill: true, tension: 0.3 }]
-      },
-      options: { scales: { y: { beginAtZero: true, max: 7 } } }
-    });`;
-
   return layout({
     title: '管理者ダッシュボード | オンライン運動元気倶楽部',
     topbar: adminTopbar('管理者ダッシュボード'),
-    script,
     body: `
     ${
       unreadMembers.length
@@ -852,7 +857,7 @@ function adminPage({ members, teamWeekly, ranked, error, message, unreadMembers 
 
     <div class="card">
       <h3>🏆 今月のランキング</h3>
-      ${ranked.length ? leaderboardHtml(ranked, null, 3) : '<p style="font-size:0.85rem;color:var(--muted);margin:0;">まだデータがありません</p>'}
+      ${ranked.length ? leaderboardHtml(ranked, null, ranked.length) : '<p style="font-size:0.85rem;color:var(--muted);margin:0;">まだデータがありません</p>'}
     </div>
 
     <div class="card">
@@ -866,11 +871,6 @@ function adminPage({ members, teamWeekly, ranked, error, message, unreadMembers 
         </table>
       </div>
       <p style="font-size:0.8rem;color:var(--muted);margin-top:8px;">特典ルール: 月${MONTHLY_GOAL}回の実施を${REWARD_MONTHS}ヶ月連続で達成すると特典1回。以降も継続すれば${REWARD_MONTHS}ヶ月ごとに繰り返し獲得できます。</p>
-    </div>
-
-    <div class="card">
-      <h3>チーム全体の週次平均実施回数</h3>
-      <canvas id="teamChart" height="110"></canvas>
     </div>
 
     <div class="card">
@@ -901,18 +901,31 @@ function adminPage({ members, teamWeekly, ranked, error, message, unreadMembers 
     </div>
 
     <div class="card">
-      <h3>データのバックアップ / 復元</h3>
+      <h3>データのバックアップ</h3>
       <p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">
-        無料ホスティングではデータが消えることがあるため、時々バックアップのダウンロードをおすすめします。
+        1日1回、自動でバックアップが保存されます(直近14日分)。ダウンロードは手動でいつでもできます。
       </p>
-      <a class="btn" href="/admin/backup" style="margin-bottom:16px;display:inline-block;">⬇ バックアップをダウンロード</a>
-      <form method="POST" action="/admin/restore" enctype="multipart/form-data" class="inline-form" onsubmit="return confirm('現在のデータをバックアップファイルの内容で上書きします。よろしいですか?');">
-        <div class="form-row">
-          <label>バックアップファイル(.json)から復元</label>
-          <input type="file" name="backupFile" accept=".json" required>
-        </div>
-        <button class="btn danger" type="submit">復元する</button>
-      </form>
+      <a class="btn" href="/admin/backup" style="display:inline-block;margin-bottom:14px;">⬇ 今すぐダウンロード</a>
+      ${
+        backups.length
+          ? `<div class="table-wrap">
+              <table>
+                <thead><tr><th>日付</th><th></th></tr></thead>
+                <tbody>
+                  ${backups
+                    .map(
+                      (b) => `
+                  <tr>
+                    <td>${formatDateJa(b.date)}</td>
+                    <td><a class="btn" href="/admin/backups/${b.id}">⬇ ダウンロード</a></td>
+                  </tr>`
+                    )
+                    .join('')}
+                </tbody>
+              </table>
+            </div>`
+          : `<p style="font-size:0.85rem;color:var(--muted);margin:0;">自動バックアップはまだありません(アクセスすると当日分が作成されます)</p>`
+      }
     </div>`,
   });
 }
@@ -949,6 +962,12 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
       <h3>${formatMonthJa(monthKeyForGrid)}のカレンダー</h3>
       ${calendarNavHtml(calendarBasePath, prevMonthKey, nextMonthKey)}
       ${gridHtml(grid)}
+      <form method="POST" action="/admin/members/${member.id}/exclude-ranking" style="margin-top:14px;" onchange="this.requestSubmit()">
+        <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem;color:var(--muted);cursor:pointer;">
+          <input type="checkbox" name="excluded" value="1" ${member.excludeFromRanking ? 'checked' : ''}>
+          ランキングに表示しない(スタッフのテスト用アカウントなど)
+        </label>
+      </form>
     </div>
 
     <div class="card" id="video">

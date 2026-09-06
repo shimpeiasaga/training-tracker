@@ -1,7 +1,9 @@
 // MongoDB Atlas を使ったデータ保存(Renderの再デプロイ・スリープでデータが消えないようにするため)
 // 環境変数 MONGODB_URI が設定されている時だけ使われる(db.js が自動で切り替える)
 const { MongoClient } = require('mongodb');
-const { MAX_MEMBER_MEDIA, MAX_LIBRARY_ITEMS, DEFAULT_LIBRARY_CATEGORIES_SEED, DEFAULT_LIBRARY_CATEGORY, MAX_LIBRARY_CATEGORIES } = require('./stats');
+const { MAX_MEMBER_MEDIA, MAX_LIBRARY_ITEMS, DEFAULT_LIBRARY_CATEGORIES_SEED, DEFAULT_LIBRARY_CATEGORY, MAX_LIBRARY_CATEGORIES, todayStr, nowStr } = require('./stats');
+
+const MAX_AUTO_BACKUPS = 14; // 自動バックアップは直近14件だけ残す
 
 const uri = process.env.MONGODB_URI;
 let clientPromise = null;
@@ -108,6 +110,7 @@ function mapUser(doc) {
     passwordHash: doc.passwordHash,
     role: doc.role,
     rewardsGiven: doc.rewardsGiven || 0,
+    excludeFromRanking: !!doc.excludeFromRanking,
   };
 }
 
@@ -159,6 +162,13 @@ async function updateUserPassword(id, passwordHash) {
 async function updateUserDisplayName(id, displayName) {
   const db = await getDb();
   await db.collection('users').updateOne({ _id: Number(id) }, { $set: { displayName } });
+  return getUserById(id);
+}
+
+// ランキングから除外するかどうか(スタッフのテスト用アカウントなどを対象外にするため)
+async function setMemberRankingExcluded(id, excluded) {
+  const db = await getDb();
+  await db.collection('users').updateOne({ _id: Number(id) }, { $set: { excludeFromRanking: !!excluded } });
   return getUserById(id);
 }
 
@@ -640,6 +650,45 @@ async function exportRaw() {
   return JSON.stringify(data, null, 2);
 }
 
+// 自動バックアップの一覧(中身のデータは含めない、日付が新しい順)
+async function listBackups() {
+  const db = await getDb();
+  const docs = await db
+    .collection('backups')
+    .find({}, { projection: { data: 0 } })
+    .sort({ date: -1 })
+    .toArray();
+  return docs.map((d) => ({ id: d._id, date: d.date, createdAt: d.createdAt }));
+}
+
+// 自動バックアップの中身(JSON文字列)を1件取得する
+async function getBackupRaw(id) {
+  const db = await getDb();
+  const doc = await db.collection('backups').findOne({ _id: Number(id) });
+  return doc ? doc.data : null;
+}
+
+// 1日1回、まだ今日のバックアップが無ければ自動で作成する(会員・管理者どちらかがアクセスした時に呼ばれる)
+// 古いものは自動で削除し、件数が増えすぎないようにする
+async function ensureDailyBackup() {
+  const db = await getDb();
+  const today = todayStr();
+  const already = await db.collection('backups').findOne({ date: today });
+  if (already) return;
+  const snapshot = await exportRaw();
+  const id = await nextSeq('backups');
+  await db.collection('backups').insertOne({ _id: id, date: today, createdAt: nowStr(), data: snapshot });
+  const all = await db
+    .collection('backups')
+    .find({}, { projection: { data: 0 } })
+    .sort({ date: -1 })
+    .toArray();
+  if (all.length > MAX_AUTO_BACKUPS) {
+    const toDelete = all.slice(MAX_AUTO_BACKUPS).map((d) => d._id);
+    await db.collection('backups').deleteMany({ _id: { $in: toDelete } });
+  }
+}
+
 async function importRaw(jsonStr) {
   const parsed = JSON.parse(jsonStr);
   if (!Array.isArray(parsed.users) || !Array.isArray(parsed.checkins)) {
@@ -764,6 +813,7 @@ module.exports = {
   createUser,
   updateUserPassword,
   updateUserDisplayName,
+  setMemberRankingExcluded,
   deleteUser,
   getCheckinsForUser,
   hasCheckinForDate,
@@ -800,4 +850,7 @@ module.exports = {
   deleteBoardPost,
   exportRaw,
   importRaw,
+  listBackups,
+  getBackupRaw,
+  ensureDailyBackup,
 };

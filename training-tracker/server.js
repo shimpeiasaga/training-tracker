@@ -63,7 +63,7 @@ function resolveViewMonth(url) {
 // 今月のチェック回数で会員をランキングする(同点は同順位)
 // useDisplayName=trueの時は会員が自分で設定した表示名を使う(会員画面向け)。管理画面では常に本名を使う
 async function computeMonthlyRanking(useDisplayName = false) {
-  const members = await db.getAllMembers();
+  const members = (await db.getAllMembers()).filter((m) => !m.excludeFromRanking);
   const list = await Promise.all(
     members.map(async (m) => {
       const checkins = (await db.getCheckinsForUser(m.id)).map((c) => c.date);
@@ -129,6 +129,13 @@ const server = http.createServer(async (req, res) => {
   // ここから先はログイン必須
   if (!user) {
     return redirect(res, '/login');
+  }
+
+  // 1日1回、まだ今日分のバックアップが無ければ自動で取っておく(手動ダウンロードを忘れても大丈夫にするため)
+  try {
+    await db.ensureDailyBackup();
+  } catch (err) {
+    // 自動バックアップに失敗しても通常の利用は止めない
   }
 
   if (method === 'GET' && pathname === '/') {
@@ -367,23 +374,17 @@ const server = http.createServer(async (req, res) => {
           };
         })
       );
-      const allCheckins = (await db.getAllCheckins()).map((c) => c.date);
-      const memberCount = members.length || 1;
-      const teamWeekly = stats.weeklySeries(allCheckins, 8).map((w) => ({
-        weekStart: w.weekStart,
-        avg: Math.round((w.count / memberCount) * 10) / 10,
-      }));
       return sendHtml(
         res,
         200,
         views.adminPage({
           members,
-          teamWeekly,
           unreadMembers: await db.getMembersWithUnreadMessages(),
           ranked: await computeMonthlyRanking(),
           error: url.searchParams.get('error'),
           message: url.searchParams.get('message'),
           rankUpMessages: (await db.getSettings()).rankUpMessages,
+          backups: await db.listBackups(),
         })
       );
     }
@@ -420,6 +421,14 @@ const server = http.createServer(async (req, res) => {
         return redirect(res, '/admin?message=' + encodeURIComponent('パスワードを再設定しました'));
       }
       return redirect(res, '/admin?error=' + encodeURIComponent('パスワードは4文字以上にしてください'));
+    }
+
+    // ランキングに表示するかどうかを切り替える(スタッフのテスト用アカウントなどを外すため)
+    match = pathname.match(/^\/admin\/members\/(\d+)\/exclude-ranking$/);
+    if (match && method === 'POST') {
+      const body = await parseBody(req);
+      await db.setMemberRankingExcluded(match[1], body.excluded === '1');
+      return redirect(res, `/admin/member/${match[1]}`);
     }
 
     match = pathname.match(/^\/admin\/members\/(\d+)\/reward$/);
@@ -738,18 +747,22 @@ const server = http.createServer(async (req, res) => {
       return res.end(raw);
     }
 
-    if (pathname === '/admin/restore' && method === 'POST') {
-      try {
-        const { files } = await parseMultipart(req);
-        const file = files.backupFile;
-        if (!file || !file.content || !file.content.length) {
-          return redirect(res, '/admin?error=' + encodeURIComponent('復元するファイルを選択してください'));
-        }
-        await db.importRaw(file.content.toString('utf8'));
-        return redirect(res, '/admin?message=' + encodeURIComponent('バックアップからデータを復元しました'));
-      } catch (err) {
-        return redirect(res, '/admin?error=' + encodeURIComponent('復元に失敗しました。ファイルの形式を確認してください'));
+    // 自動で取っておいた過去のバックアップをダウンロードする
+    match = pathname.match(/^\/admin\/backups\/(\d+)$/);
+    if (match && method === 'GET') {
+      const raw = await db.getBackupRaw(match[1]);
+      if (!raw) {
+        res.writeHead(404);
+        return res.end('バックアップが見つかりません');
       }
+      const backups = await db.listBackups();
+      const found = backups.find((b) => String(b.id) === match[1]);
+      const filename = `training-tracker-backup-${(found && found.date) || stats.todayStr()}.json`;
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+      });
+      return res.end(raw);
     }
 
     match = pathname.match(/^\/admin\/member\/(\d+)$/);

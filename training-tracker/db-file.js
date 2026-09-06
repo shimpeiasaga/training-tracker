@@ -2,7 +2,9 @@
 // 自分のPCで動かす場合はこちらが使われる(MONGODB_URIが無い時のデフォルト)
 const fs = require('fs');
 const path = require('path');
-const { MAX_MEMBER_MEDIA, MAX_LIBRARY_ITEMS, DEFAULT_LIBRARY_CATEGORIES_SEED, DEFAULT_LIBRARY_CATEGORY, MAX_LIBRARY_CATEGORIES } = require('./stats');
+const { MAX_MEMBER_MEDIA, MAX_LIBRARY_ITEMS, DEFAULT_LIBRARY_CATEGORIES_SEED, DEFAULT_LIBRARY_CATEGORY, MAX_LIBRARY_CATEGORIES, todayStr, nowStr } = require('./stats');
+
+const MAX_AUTO_BACKUPS = 14; // 自動バックアップは直近14件だけ残す
 
 const DATA_DIR = path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'data.json');
@@ -22,6 +24,7 @@ function ensureDataFile() {
           media: [],
           library: [],
           settings: { rankUpMessages: {} },
+          backups: [],
           nextUserId: 1,
           nextCheckinId: 1,
           nextMessageId: 1,
@@ -48,6 +51,7 @@ function load() {
   if (!Array.isArray(data.library)) data.library = [];
   if (!data.settings || typeof data.settings !== 'object') data.settings = {};
   if (!data.settings.rankUpMessages || typeof data.settings.rankUpMessages !== 'object') data.settings.rankUpMessages = {};
+  if (!Array.isArray(data.backups)) data.backups = [];
   if (typeof data.nextMessageId !== 'number') data.nextMessageId = 1;
   if (typeof data.nextPostId !== 'number') data.nextPostId = 1;
   if (typeof data.nextReplyId !== 'number') data.nextReplyId = 1;
@@ -157,6 +161,17 @@ function updateUserDisplayName(id, displayName) {
   const user = data.users.find((u) => u.id === Number(id));
   if (user) {
     user.displayName = displayName;
+    save(data);
+  }
+  return user;
+}
+
+// ランキングから除外するかどうか(スタッフのテスト用アカウントなどを対象外にするため)
+function setMemberRankingExcluded(id, excluded) {
+  const data = load();
+  const user = data.users.find((u) => u.id === Number(id));
+  if (user) {
+    user.excludeFromRanking = !!excluded;
     save(data);
   }
   return user;
@@ -519,6 +534,36 @@ function exportRaw() {
   return JSON.stringify(load(), null, 2);
 }
 
+// 自動バックアップの一覧(中身のデータは含めない、日付が新しい順)
+function listBackups() {
+  return load()
+    .backups.map((b) => ({ id: b.id, date: b.date, createdAt: b.createdAt }))
+    .sort((a, b) => b.date.localeCompare(a.date));
+}
+
+// 自動バックアップの中身(JSON文字列)を1件取得する
+function getBackupRaw(id) {
+  const b = load().backups.find((x) => x.id === Number(id));
+  return b ? b.data : null;
+}
+
+// 1日1回、まだ今日のバックアップが無ければ自動で作成する(会員・管理者どちらかがアクセスした時に呼ばれる)
+// 古いものは自動で削除し、件数が増えすぎないようにする
+function ensureDailyBackup() {
+  const data = load();
+  const today = todayStr();
+  const already = data.backups.some((b) => b.date === today);
+  if (already) return;
+  const { backups, ...rest } = data; // バックアップ自体の中に一覧を含めて肥大化しないようにする
+  const nextId = data.backups.reduce((max, b) => Math.max(max, b.id + 1), 1);
+  data.backups.push({ id: nextId, date: today, createdAt: nowStr(), data: JSON.stringify(rest) });
+  data.backups.sort((a, b) => b.date.localeCompare(a.date));
+  if (data.backups.length > MAX_AUTO_BACKUPS) {
+    data.backups = data.backups.slice(0, MAX_AUTO_BACKUPS);
+  }
+  save(data);
+}
+
 function importRaw(jsonStr) {
   const parsed = JSON.parse(jsonStr);
   if (!Array.isArray(parsed.users) || !Array.isArray(parsed.checkins)) {
@@ -550,6 +595,7 @@ function importRaw(jsonStr) {
   if (typeof parsed.nextLibraryId !== 'number') {
     parsed.nextLibraryId = parsed.library.reduce((max, m) => Math.max(max, m.id + 1), 1);
   }
+  if (!Array.isArray(parsed.backups)) parsed.backups = [];
   save(parsed);
 }
 
@@ -564,6 +610,7 @@ module.exports = {
   createUser,
   updateUserPassword,
   updateUserDisplayName,
+  setMemberRankingExcluded,
   deleteUser,
   getCheckinsForUser,
   hasCheckinForDate,
@@ -600,4 +647,7 @@ module.exports = {
   deleteBoardPost,
   exportRaw,
   importRaw,
+  listBackups,
+  getBackupRaw,
+  ensureDailyBackup,
 };
