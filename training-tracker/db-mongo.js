@@ -204,14 +204,26 @@ function mapMedia(doc) {
 }
 
 // sortOrderが無い古いデータはidをそのまま並び順として使う(見た目の順番は変わらない)
+// 一覧では画像本体(imageData)は取得しない(ページが重くなるのを防ぐため。
+// 画像は専用URL(/media/:id/image)から個別に配信する)
 async function getMediaForMember(memberId) {
   const db = await getDb();
   const docs = await db
     .collection('media')
-    .find({ memberId: Number(memberId) })
+    .find({ memberId: Number(memberId) }, { projection: { imageData: 0 } })
     .sort({ _id: 1 })
     .toArray();
   return docs.map(mapMedia).sort((a, b) => a.sortOrder - b.sortOrder);
+}
+
+// 画像そのもの(base64)を1件だけ取り出す(ページHTMLに埋め込まず、専用URLで配信するため)
+async function getMediaImageById(mediaId) {
+  const db = await getDb();
+  const doc = await db
+    .collection('media')
+    .findOne({ _id: Number(mediaId) }, { projection: { memberId: 1, mimeType: 1, imageData: 1 } });
+  if (!doc) return null;
+  return { memberId: doc.memberId, mimeType: doc.mimeType, imageData: doc.imageData };
 }
 
 async function addMemberMedia(memberId, { type, title, url, imageData, mimeType, htmlContent, note, createdAt }) {
@@ -274,10 +286,21 @@ function mapLibraryItem(doc) {
   };
 }
 
+// 一覧では画像本体(imageData)は取得しない(専用URLから個別に配信するため)
 async function getLibrary() {
   const db = await getDb();
-  const docs = await db.collection('library').find({}).sort({ _id: -1 }).toArray();
+  const docs = await db.collection('library').find({}, { projection: { imageData: 0 } }).sort({ _id: -1 }).toArray();
   return docs.map(mapLibraryItem);
+}
+
+// 画像そのもの(base64)を1件だけ取り出す(ページHTMLに埋め込まず、専用URLで配信するため)
+async function getLibraryImageById(libraryId) {
+  const db = await getDb();
+  const doc = await db
+    .collection('library')
+    .findOne({ _id: Number(libraryId) }, { projection: { mimeType: 1, imageData: 1 } });
+  if (!doc) return null;
+  return { mimeType: doc.mimeType, imageData: doc.imageData };
 }
 
 const LIBRARY_CATEGORIES_DOC_ID = 'libraryCategories';

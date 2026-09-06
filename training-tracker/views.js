@@ -27,9 +27,10 @@ function videoPlayerHtml(video) {
   return `<p style="font-size:0.9rem;"><a href="${escapeHtml(video.url)}" target="_blank" rel="noopener">動画を開く &rarr;</a></p>`;
 }
 
-// 画像1枚ぶんの表示(base64で保存した画像データをそのまま埋め込む)
+// 画像1枚ぶんの表示(base64をページに埋め込まず、専用URLから読み込む。ページを軽くし、
+// ブラウザに画像だけキャッシュさせるため)
 function imageDisplayHtml(item) {
-  return `<img class="media-image" src="data:${escapeHtml(item.mimeType)};base64,${item.imageData}" alt="${escapeHtml(item.title)}">`;
+  return `<img class="media-image" src="/media/${item.id}/image" alt="${escapeHtml(item.title)}" loading="lazy">`;
 }
 
 // 自己完結型HTMLツール(呼吸法など)の表示。sandboxでスクリプトのみ許可し、ホスト側から隔離する
@@ -100,7 +101,7 @@ function mediaListHtml(media, { deletable = false, memberId } = {}) {
 // ライブラリ選択欄用の小さいサムネイル(画像はミニ画像、動画・HTMLツールはアイコン)
 function libraryThumbHtml(v) {
   if (v.type === 'image') {
-    return `<img class="lib-pick-thumb" src="data:${escapeHtml(v.mimeType)};base64,${v.imageData}" alt="">`;
+    return `<img class="lib-pick-thumb" src="/library/${v.id}/image" alt="" loading="lazy">`;
   }
   const icon = v.type === 'html' ? '🧘' : '🎥';
   return `<div class="lib-pick-thumb lib-pick-icon">${icon}</div>`;
@@ -262,17 +263,23 @@ const SCROLL_RESTORE_SCRIPT = `
 (function () {
   if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
   var key = 'scrollY_' + location.pathname;
-  var savedY = sessionStorage.getItem(key);
-  if (savedY !== null) {
+  // URLに#video/#messages/#historyなどが付いている場合は、ブラウザ標準のジャンプ機能に任せる。
+  // そちらの方がセクションの高さが変わっても正しい位置に着地できるため、
+  // ここでの座標(px)復元は行わない(行うと標準ジャンプと競合してズレる)
+  if (!location.hash) {
+    var savedY = sessionStorage.getItem(key);
+    if (savedY !== null) {
+      sessionStorage.removeItem(key);
+      var y = parseInt(savedY, 10);
+      var restore = function () { window.scrollTo(0, y); };
+      restore();
+      requestAnimationFrame(restore);
+      setTimeout(restore, 0);
+      setTimeout(restore, 150);
+      window.addEventListener('load', restore);
+    }
+  } else {
     sessionStorage.removeItem(key);
-    var y = parseInt(savedY, 10);
-    var restore = function () { window.scrollTo(0, y); };
-    // URLの#video等に対するブラウザ標準のジャンプより後に効かせるため、複数タイミングで上書きする
-    restore();
-    requestAnimationFrame(restore);
-    setTimeout(restore, 0);
-    setTimeout(restore, 150);
-    window.addEventListener('load', restore);
   }
   document.addEventListener('submit', function (e) {
     if (e.defaultPrevented) return;

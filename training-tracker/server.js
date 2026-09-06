@@ -103,7 +103,11 @@ function serveStatic(req, res, pathname) {
       return res.end('Not found');
     }
     const ext = path.extname(filePath);
-    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
+    // CSS・アイコンなどは内容が変わらない限りブラウザにキャッシュさせ、毎回の再ダウンロードを避ける
+    res.writeHead(200, {
+      'Content-Type': MIME[ext] || 'application/octet-stream',
+      'Cache-Control': 'public, max-age=3600',
+    });
     res.end(data);
   });
 }
@@ -162,6 +166,44 @@ const server = http.createServer(async (req, res) => {
 
   if (method === 'GET' && pathname === '/') {
     return redirect(res, user.role === 'admin' ? '/admin' : '/member');
+  }
+
+  // 画像はページのHTMLに埋め込まず、専用URLから配信する(ページ本体を軽くして表示を速くし、
+  // ブラウザに画像だけキャッシュさせて再読み込み時に毎回ダウンロードし直さないようにするため)
+  let mediaImageMatch = pathname.match(/^\/media\/(\d+)\/image$/);
+  if (mediaImageMatch && method === 'GET') {
+    const item = await db.getMediaImageById(mediaImageMatch[1]);
+    if (!item || !item.imageData) {
+      res.writeHead(404);
+      return res.end('Not found');
+    }
+    if (user.role !== 'admin' && Number(item.memberId) !== Number(user.id)) {
+      res.writeHead(403);
+      return res.end('Forbidden');
+    }
+    res.writeHead(200, {
+      'Content-Type': item.mimeType || 'application/octet-stream',
+      'Cache-Control': 'private, max-age=604800, immutable',
+    });
+    return res.end(Buffer.from(item.imageData, 'base64'));
+  }
+
+  let libraryImageMatch = pathname.match(/^\/library\/(\d+)\/image$/);
+  if (libraryImageMatch && method === 'GET') {
+    if (user.role !== 'admin') {
+      res.writeHead(403);
+      return res.end('Forbidden');
+    }
+    const item = await db.getLibraryImageById(libraryImageMatch[1]);
+    if (!item || !item.imageData) {
+      res.writeHead(404);
+      return res.end('Not found');
+    }
+    res.writeHead(200, {
+      'Content-Type': item.mimeType || 'application/octet-stream',
+      'Cache-Control': 'private, max-age=604800, immutable',
+    });
+    return res.end(Buffer.from(item.imageData, 'base64'));
   }
 
   // --- 会員ページ ---
@@ -235,7 +277,7 @@ const server = http.createServer(async (req, res) => {
         createdAt: stats.nowStr(),
       });
     }
-    return redirect(res, '/member');
+    return redirect(res, '/member#messages');
   }
 
   let memberMsgDeleteMatch = pathname.match(/^\/member\/messages\/(\d+)\/delete$/);
@@ -246,7 +288,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(403);
       return res.end('権限がありません');
     }
-    return redirect(res, '/member');
+    return redirect(res, '/member#messages');
   }
 
   // --- 会員向け掲示板(誰でも投稿できる、返信できるのは管理者のみ) ---
@@ -330,7 +372,7 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       // チェックインが存在しない日付を指定された場合などは何もせず戻る
     }
-    return redirect(res, '/member');
+    return redirect(res, '/member#history');
   }
 
   if (pathname === '/member/password' && method === 'GET') {
@@ -481,7 +523,7 @@ const server = http.createServer(async (req, res) => {
           createdAt: stats.nowStr(),
         });
       }
-      return redirect(res, `/admin/member/${match[1]}`);
+      return redirect(res, `/admin/member/${match[1]}#messages`);
     }
 
     match = pathname.match(/^\/admin\/members\/(\d+)\/messages\/(\d+)\/delete$/);
@@ -492,7 +534,7 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(403);
         return res.end('権限がありません');
       }
-      return redirect(res, `/admin/member/${match[1]}`);
+      return redirect(res, `/admin/member/${match[1]}#messages`);
     }
 
     match = pathname.match(/^\/admin\/members\/(\d+)\/media\/video$/);
@@ -505,10 +547,10 @@ const server = http.createServer(async (req, res) => {
         try {
           await db.addMemberMedia(match[1], { type: 'video', title, url: videoUrl, note, createdAt: stats.nowStr() });
         } catch (err) {
-          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message)}`);
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message)}#video`);
         }
       }
-      return redirect(res, `/admin/member/${match[1]}`);
+      return redirect(res, `/admin/member/${match[1]}#video`);
     }
 
     match = pathname.match(/^\/admin\/members\/(\d+)\/media\/image$/);
@@ -522,15 +564,15 @@ const server = http.createServer(async (req, res) => {
         const note = (fields.note || '').trim();
         const file = files.image;
         if (!title || !file || !file.content || !file.content.length) {
-          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('タイトルと画像ファイルを指定してください')}`);
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('タイトルと画像ファイルを指定してください')}#video`);
         }
         if (file.content.length > MAX_IMAGE_BYTES) {
-          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('画像は5MBまでです')}`);
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('画像は5MBまでです')}#video`);
         }
         const ext = (file.filename.split('.').pop() || '').toLowerCase();
         const mimeType = ALLOWED_TYPES[file.contentType] ? file.contentType : EXT_TYPE[ext];
         if (!mimeType) {
-          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('対応していない画像形式です(jpg/png/webp/gifのみ)')}`);
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('対応していない画像形式です(jpg/png/webp/gifのみ)')}#video`);
         }
         await db.addMemberMedia(match[1], {
           type: 'image',
@@ -541,9 +583,9 @@ const server = http.createServer(async (req, res) => {
           createdAt: stats.nowStr(),
         });
       } catch (err) {
-        return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message || '画像の登録に失敗しました')}`);
+        return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message || '画像の登録に失敗しました')}#video`);
       }
-      return redirect(res, `/admin/member/${match[1]}`);
+      return redirect(res, `/admin/member/${match[1]}#video`);
     }
 
     match = pathname.match(/^\/admin\/members\/(\d+)\/media\/html$/);
@@ -554,14 +596,14 @@ const server = http.createServer(async (req, res) => {
         const title = (fields.title || '').trim();
         const file = files.htmlFile;
         if (!title || !file || !file.content || !file.content.length) {
-          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('タイトルとHTMLファイルを指定してください')}`);
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('タイトルとHTMLファイルを指定してください')}#video`);
         }
         if (file.content.length > MAX_HTML_BYTES) {
-          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('HTMLファイルは500KBまでです')}`);
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('HTMLファイルは500KBまでです')}#video`);
         }
         const ext = (file.filename.split('.').pop() || '').toLowerCase();
         if (ext !== 'html' && ext !== 'htm') {
-          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('.htmlファイルのみアップロードできます')}`);
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('.htmlファイルのみアップロードできます')}#video`);
         }
         await db.addMemberMedia(match[1], {
           type: 'html',
@@ -571,15 +613,15 @@ const server = http.createServer(async (req, res) => {
           createdAt: stats.nowStr(),
         });
       } catch (err) {
-        return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message || 'HTMLツールの登録に失敗しました')}`);
+        return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message || 'HTMLツールの登録に失敗しました')}#video`);
       }
-      return redirect(res, `/admin/member/${match[1]}`);
+      return redirect(res, `/admin/member/${match[1]}#video`);
     }
 
     match = pathname.match(/^\/admin\/members\/(\d+)\/media\/(\d+)\/delete$/);
     if (match && method === 'POST') {
       await db.removeMemberMedia(match[1], match[2]);
-      return redirect(res, `/admin/member/${match[1]}`);
+      return redirect(res, `/admin/member/${match[1]}#video`);
     }
 
     match = pathname.match(/^\/admin\/members\/(\d+)\/media\/(\d+)\/note$/);
@@ -591,7 +633,7 @@ const server = http.createServer(async (req, res) => {
       } catch (err) {
         // 対象が見つからない場合などは何もせず戻る
       }
-      return redirect(res, `/admin/member/${match[1]}`);
+      return redirect(res, `/admin/member/${match[1]}#video`);
     }
 
     // 会員が選ぶ専用トレーニング一覧の表示順を1つ上/下に入れ替える
@@ -763,9 +805,9 @@ const server = http.createServer(async (req, res) => {
       try {
         await db.assignLibraryItemToMember(match[1], match[2], note, stats.nowStr());
       } catch (err) {
-        return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message)}`);
+        return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message)}#video`);
       }
-      return redirect(res, `/admin/member/${match[1]}`);
+      return redirect(res, `/admin/member/${match[1]}#video`);
     }
 
     if (pathname === '/admin/backup' && method === 'GET') {

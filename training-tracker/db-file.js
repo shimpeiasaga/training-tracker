@@ -198,6 +198,13 @@ function getMediaForMember(memberId) {
     .sort((a, b) => a.sortOrder - b.sortOrder);
 }
 
+// 画像そのもの(base64)を1件だけ取り出す(ページHTMLに埋め込まず、専用URLで配信するため)
+function getMediaImageById(mediaId) {
+  const item = load().media.find((m) => m.id === Number(mediaId));
+  if (!item) return null;
+  return { memberId: item.memberId, mimeType: item.mimeType, imageData: item.imageData };
+}
+
 function addMemberMedia(memberId, { type, title, url, imageData, mimeType, htmlContent, note, createdAt }) {
   const data = load();
   const user = data.users.find((u) => u.id === Number(memberId));
@@ -253,6 +260,13 @@ function updateMemberMediaNote(memberId, mediaId, note) {
 }
 
 // --- 素材ライブラリ(会員に配る前の動画・画像を管理者がまとめて置いておく場所) ---
+// 画像そのもの(base64)を1件だけ取り出す(ページHTMLに埋め込まず、専用URLで配信するため)
+function getLibraryImageById(libraryId) {
+  const item = load().library.find((m) => m.id === Number(libraryId));
+  if (!item) return null;
+  return { mimeType: item.mimeType, imageData: item.imageData };
+}
+
 function getLibrary() {
   return load()
     .library.slice()
@@ -620,6 +634,7 @@ module.exports = {
   getAllCheckins,
   incrementRewardsGiven,
   getMediaForMember,
+  getMediaImageById,
   addMemberMedia,
   removeMemberMedia,
   moveMemberMedia,
@@ -627,6 +642,7 @@ module.exports = {
   getSettings,
   updateSettings,
   getLibrary,
+  getLibraryImageById,
   getLibraryCategories,
   addLibraryCategory,
   renameLibraryCategory,
