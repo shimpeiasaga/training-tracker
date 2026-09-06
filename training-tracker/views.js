@@ -281,6 +281,57 @@ const SCROLL_RESTORE_SCRIPT = `
 })();
 `;
 
+// 専用トレーニングの並び替え(▲▼)専用: ページ全体を再読み込みせず、その場で順番を入れ替える。
+// これにより、並び替えのたびにスクロール位置が上に戻ってしまう問題を根本的に避けられる
+const MEDIA_REORDER_SCRIPT = `
+(function () {
+  var CIRCLED = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
+  document.addEventListener('submit', function (e) {
+    var form = e.target;
+    if (!(form instanceof HTMLFormElement)) return;
+    var action = form.getAttribute('action') || '';
+    if (!/\\/media\\/\\d+\\/move$/.test(action)) return;
+    var item = form.closest('.video-item');
+    var dirInput = form.querySelector('input[name="direction"]');
+    var direction = dirInput ? dirInput.value : 'down';
+    if (!item) return;
+    var list = item.parentElement;
+    var sibling = direction === 'up' ? item.previousElementSibling : item.nextElementSibling;
+    if (!sibling) return;
+    e.preventDefault();
+    fetch(action, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'direction=' + direction,
+      credentials: 'same-origin',
+    })
+      .then(function (res) {
+        if (!res.ok) throw new Error('failed');
+        if (direction === 'up') {
+          list.insertBefore(item, sibling);
+        } else {
+          list.insertBefore(sibling, item);
+        }
+        var items = list.querySelectorAll('.video-item');
+        items.forEach(function (el, i) {
+          var h4 = el.querySelector('.video-item-head h4');
+          if (h4) {
+            var title = h4.textContent.replace(/^\\S+\\s/, '');
+            h4.textContent = (CIRCLED[i] || i + 1) + ' ' + title;
+          }
+          var upBtn = el.querySelector('button[title="上に移動"]');
+          var downBtn = el.querySelector('button[title="下に移動"]');
+          if (upBtn) upBtn.disabled = i === 0;
+          if (downBtn) downBtn.disabled = i === items.length - 1;
+        });
+      })
+      .catch(function () {
+        location.reload();
+      });
+  });
+})();
+`;
+
 // 会員TOPページ専用: 下に引っ張って更新するジェスチャー(プルアンドフレッシュ)
 const PULL_TO_REFRESH_SCRIPT = `
 (function () {
@@ -950,6 +1001,7 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
     title: `${escapeHtml(member.name)} の詳細 | オンライン運動元気倶楽部`,
     topbar: adminTopbar('管理者ダッシュボード', '/admin'),
     script,
+    extraScript: MEDIA_REORDER_SCRIPT,
     body: `
     ${hadUnreadMessages ? `<a href="#messages" class="notice-banner">📩 ${escapeHtml(member.name)}さんから新着メッセージがあります</a>` : ''}
     <div class="card">
