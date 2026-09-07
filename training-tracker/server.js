@@ -76,19 +76,21 @@ async function getMembersWithCheckins() {
 
 // 今月のチェック回数で会員をランキングする(同点は同順位)。すでに取得済みのmembersWithCheckinsがあれば使い回す
 // useDisplayName=trueの時は会員が自分で設定した表示名を使う(会員画面向け)。管理画面では常に本名を使う
-function rankFromMembers(membersWithCheckins, useDisplayName = false) {
+// excludeZero=trueの時は今月0回の会員をランキングから除外する(会員画面向け。管理画面では全員表示する)
+function rankFromMembers(membersWithCheckins, useDisplayName = false, excludeZero = false) {
   const list = membersWithCheckins
     .filter((m) => !m.excludeFromRanking)
     .map((m) => ({
       id: m.id,
       name: useDisplayName && m.displayName ? m.displayName : m.name,
       count: stats.currentMonthCount(m.checkins),
-    }));
+    }))
+    .filter((m) => !excludeZero || m.count > 0);
   return stats.rankMembers(list);
 }
 
-async function computeMonthlyRanking(useDisplayName = false) {
-  return rankFromMembers(await getMembersWithCheckins(), useDisplayName);
+async function computeMonthlyRanking(useDisplayName = false, excludeZero = false) {
+  return rankFromMembers(await getMembersWithCheckins(), useDisplayName, excludeZero);
 }
 
 function serveStatic(req, res, pathname) {
@@ -231,7 +233,7 @@ async function handleRequest(req, res) {
       db.getCheckinsForUser(user.id),
       db.hasUnreadMessages(user.id, 'member'),
       db.getMessagesForMember(user.id),
-      computeMonthlyRanking(true),
+      computeMonthlyRanking(true, true),
       db.getMediaForMember(user.id),
     ]);
     const checkins = checkinRecords.map((c) => c.date);
