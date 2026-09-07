@@ -113,6 +113,22 @@ function serveStatic(req, res, pathname) {
 }
 
 const server = http.createServer(async (req, res) => {
+  // ルート処理中に想定外のエラーが起きても、サーバー全体を落とさずそのリクエストだけエラーにする
+  // (以前、DB側の関数呼び出しミスが原因でサーバープロセスごと落ちてしまったことがあったための対策)
+  try {
+    return await handleRequest(req, res);
+  } catch (err) {
+    console.error('リクエスト処理中にエラーが発生しました:', err);
+    if (!res.headersSent) {
+      res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('エラーが発生しました。しばらくしてからもう一度お試しください。');
+    } else {
+      res.end();
+    }
+  }
+});
+
+async function handleRequest(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const pathname = url.pathname;
   const method = req.method;
@@ -904,7 +920,7 @@ const server = http.createServer(async (req, res) => {
 
   res.writeHead(404);
   res.end('Not found');
-});
+}
 
 (async () => {
   try {
