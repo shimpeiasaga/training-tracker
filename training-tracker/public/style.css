@@ -696,6 +696,12 @@ summary.lib-category-heading::marker { color: var(--primary); }
 .msg-meta { font-size: 0.7rem; color: var(--muted); margin-bottom: 2px; }
 .msg-body { font-size: 0.9rem; white-space: pre-wrap; word-break: break-word; }
 
+/* --- 使い方ガイド --- */
+.guide-item { margin-bottom: 16px; }
+.guide-item:last-child { margin-bottom: 0; }
+.guide-item h4 { margin: 0 0 4px; font-size: 0.95rem; }
+.guide-item p { margin: 0; font-size: 0.88rem; color: var(--muted); line-height: 1.6; }
+
 /* --- 掲示板 --- */
 .board-post-meta {
   display: flex;

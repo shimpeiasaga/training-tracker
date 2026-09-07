@@ -407,6 +407,7 @@ function adminTopbar(label, backHref = '') {
     <span class="brand">${backHref ? `<a href="${backHref}">&larr; ${escapeHtml(label)}</a>` : escapeHtml(label)}</span>
     <div class="topbar-actions">
       <a href="/board">💬 みんなの掲示板</a>
+      <a href="/guide">📖 使い方ガイド</a>
       ${ADMIN_REFRESH_BTN}
       <form method="POST" action="/logout"><button type="submit">ログアウト</button></form>
     </div>
@@ -431,9 +432,62 @@ function topbar(label, showLogout = true, showSiteTitle = false, settingsMenu = 
     </span>
     <div class="topbar-actions">
       <a href="/board">💬 みんなの掲示板</a>
+      <a href="/guide">📖 使い方ガイド</a>
       ${showLogout ? `<form method="POST" action="/logout"><button type="submit">ログアウト</button></form>` : ''}
     </div>
   </div>`;
+}
+
+// ガイド内の1項目(見出し+説明文)
+function guideItem(title, body) {
+  return `<div class="guide-item"><h4>${title}</h4><p>${body}</p></div>`;
+}
+
+// サイトの使い方ガイド。会員には会員向けの案内のみ、管理者には管理者向けの案内も追加で表示する
+function guidePage(userRole) {
+  const memberItems = [
+    guideItem('✅ 毎日のチェック', 'トップページの「トレーニング完了をチェック」ボタンを押すと、その日の実施が記録されます。間違えて押した時は、もう一度押すと取り消せます。'),
+    guideItem('🎥 専用トレーニング', '担当のアドバイザーが登録してくれた動画・画像・呼吸法ツールを確認しながら取り組めます。セット数や回数の目安が書かれている場合はその下に表示されます。'),
+    guideItem('📅 カレンダー・実施記録', '過去に実施した日をカレンダーで振り返れます。実施した日の記録は日付をタップすると、その日のメモを自由に書き込めます。'),
+    guideItem('🏅 バッジ(ランク)', '累計の実施日数に応じて、ビギナーからレジェンドまでバッジが増えていきます。新しいバッジを獲得するとお祝いメッセージが表示されます。'),
+    guideItem('🎁 メニュー更新特典', '月の目標回数を複数ヶ月連続で達成すると、アドバイザーにメニュー更新を相談できる特典がもらえます。進み具合はトップページで確認できます。'),
+    guideItem('📩 メッセージ', 'アドバイザーに直接メッセージを送れます。やり取りは常に一番新しいものが見える状態で開きます。過去のものは枠内を上にスクロールすると読めます。'),
+    guideItem('🏆 ランキング', '今月の実施回数の順位(上位3名)を確認できます。'),
+    guideItem('⚙️ 設定', '「設定」を開くと、会員ページに表示する名前(表示名)やログインパスワードを自分で変更できます。'),
+    guideItem('💬 みんなの掲示板', '会員同士が自由に投稿・交流できる場所です。返信ができるのはアドバイザー(管理者)のみです。'),
+  ].join('');
+
+  const adminItems = userRole === 'admin'
+    ? [
+        guideItem('👤 会員の追加', 'ダッシュボード下部の「会員を追加」から、名前・ユーザー名・初期パスワードを入力して登録します。ユーザー名とパスワードは会員本人に伝えてください。'),
+        guideItem('📋 会員詳細ページ', '会員一覧の「詳細」から個別ページに移動できます。進捗の確認、専用トレーニングの登録、メッセージのやり取りはすべてここから行います。'),
+        guideItem('🎥 専用トレーニングの登録', '会員詳細ページから動画(YouTubeリンクなど)・画像・呼吸法などのHTMLツールを追加できます。▲▼ボタンで表示順を入れ替えたり、「セット数・回数を編集」からメモ(例: 3セット×10回)を追加・修正できます。'),
+        guideItem('🎥📷 素材ライブラリ', 'よく使う動画・画像をあらかじめ登録しておける置き場です。会員ごとに毎回アップロードし直さなくても、ライブラリから選んで配布できます。'),
+        guideItem('🚫 ランキングから除外', 'スタッフのテスト用アカウントなど、ランキングに表示したくない会員は、会員詳細ページのチェックボックスで除外できます。'),
+        guideItem('🎁 特典を渡す', '目標を連続達成した会員には一覧に「特典を渡す」ボタンが表示されます。実際に特典を渡したらボタンを押して記録してください。'),
+        guideItem('🎉 ランクアップお祝いメッセージ', 'ダッシュボードの「ランクアップ時のお祝いメッセージ」から、バッジ獲得時に表示する一言メッセージをバッジごとに設定できます。'),
+        guideItem('📩 メッセージ対応', '会員から届いたメッセージに返信できます。新着があるとダッシュボード上部に通知が表示されます。'),
+        guideItem('💾 バックアップ', '1日1回自動でバックアップが保存され、直近14日分をいつでもダウンロードできます。手動ですぐに保存したい時は「今すぐダウンロード」を押してください。'),
+        guideItem('🔄 更新ボタン', '画面右上の「🔄 更新」を押すと、最新の状態に読み込み直せます。'),
+      ].join('')
+    : '';
+
+  return layout({
+    title: '使い方ガイド | オンライン運動元気倶楽部',
+    topbar: `<div class="topbar"><span class="brand"><a href="${userRole === 'admin' ? '/admin' : '/member'}">&larr; 戻る</a></span></div>`,
+    body: `
+    <div class="card">
+      <h2>📖 使い方ガイド</h2>
+      <p style="font-size:0.9rem;color:var(--muted);margin:0;">オンライン運動元気倶楽部の基本的な使い方をまとめています。</p>
+    </div>
+
+    <div class="card">
+      <h3>🙋 会員のみなさんへ</h3>
+      ${memberItems}
+    </div>
+
+    ${userRole === 'admin' ? `<div class="card"><h3>🛠 管理者のみなさんへ</h3>${adminItems}</div>` : ''}`,
+  });
 }
 
 function loginPage(error) {
@@ -863,7 +917,7 @@ function memberPage({
 function memberPasswordPage({ userName, error, message }) {
   return layout({
     title: 'パスワード変更 | オンライン運動元気倶楽部',
-    topbar: `<div class="topbar"><span class="brand"><a href="/member">&larr; 戻る</a></span><div class="topbar-actions"><a href="/board">💬 みんなの掲示板</a><form method="POST" action="/logout"><button type="submit">ログアウト</button></form></div></div>`,
+    topbar: `<div class="topbar"><span class="brand"><a href="/member">&larr; 戻る</a></span><div class="topbar-actions"><a href="/board">💬 みんなの掲示板</a><a href="/guide">📖 使い方ガイド</a><form method="POST" action="/logout"><button type="submit">ログアウト</button></form></div></div>`,
     body: `
     ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
     <div class="card">
@@ -1329,4 +1383,4 @@ function boardPage({ posts, userRole, userName, userId, error }) {
   });
 }
 
-module.exports = { escapeHtml, loginPage, memberPage, memberPasswordPage, adminPage, adminMemberPage, adminLibraryPage, boardPage };
+module.exports = { escapeHtml, loginPage, memberPage, memberPasswordPage, adminPage, adminMemberPage, adminLibraryPage, boardPage, guidePage };

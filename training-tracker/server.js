@@ -291,6 +291,11 @@ const server = http.createServer(async (req, res) => {
     return redirect(res, '/member#messages');
   }
 
+  // --- 使い方ガイド(会員・管理者共通、内容は役割に応じて出し分け) ---
+  if (pathname === '/guide' && method === 'GET') {
+    return sendHtml(res, 200, views.guidePage(user.role));
+  }
+
   // --- 会員向け掲示板(誰でも投稿できる、返信できるのは管理者のみ) ---
   if (pathname === '/board' && method === 'GET') {
     return sendHtml(
