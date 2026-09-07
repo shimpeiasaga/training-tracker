@@ -44,12 +44,17 @@ body {
   gap: 14px;
 }
 .topbar-actions a { font-size: 0.85rem; opacity: 0.95; }
-.topbar-secondary {
-  background: var(--primary);
-  padding: 0 24px 12px;
+
+/* ページ末尾の「みんなの掲示板」リンク(右寄せ) */
+.board-link-footer {
   text-align: right;
+  margin-top: 20px;
 }
-.topbar-secondary a { color: #fff; text-decoration: none; font-size: 0.85rem; opacity: 0.95; }
+.board-link-footer a {
+  font-size: 0.85rem;
+  color: var(--primary);
+  text-decoration: none;
+}
 
 .topbar-settings { position: relative; }
 .topbar-settings summary {
@@ -215,6 +220,9 @@ h1, h2, h3 { margin-top: 0; }
 .grid .day.sun .daynum { color: #dc2626; }
 .grid .day.checked.sat .daynum,
 .grid .day.checked.sun .daynum { color: #fff; }
+
+/* 管理画面で会員のカレンダーを見る時は、セルが横いっぱいに広がりすぎないよう少し小さめに表示する */
+.calendar-compact { max-width: 380px; }
 
 .history-list {
   list-style: none;
@@ -627,13 +635,23 @@ summary.lib-category-heading::marker { color: var(--primary); }
   flex-direction: column;
   gap: 8px;
 }
+.lib-pick-item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+}
+.lib-pick-item .lib-pick-form { margin-top: 10px; }
+.lib-pick-preview { margin: 10px 0; }
+.lib-pick-preview-hint {
+  font-size: 0.72rem;
+  color: var(--muted);
+  flex-shrink: 0;
+}
 .lib-pick-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  cursor: pointer;
   flex-wrap: wrap;
 }
 .lib-pick-thumb {
@@ -751,7 +769,6 @@ summary.lib-category-heading::marker { color: var(--primary); }
   th, td { padding: 8px 6px; font-size: 0.85rem; }
   .topbar { flex-wrap: wrap; gap: 8px; }
   .topbar-actions { gap: 10px; }
-  .topbar-secondary { padding: 0 16px 10px; }
   .msg-bubble { max-width: 92%; }
   .board-reply { margin-left: 8px; }
 }

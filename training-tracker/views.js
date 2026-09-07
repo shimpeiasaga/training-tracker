@@ -28,9 +28,10 @@ function videoPlayerHtml(video) {
 }
 
 // 画像1枚ぶんの表示(base64をページに埋め込まず、専用URLから読み込む。ページを軽くし、
-// ブラウザに画像だけキャッシュさせるため)
-function imageDisplayHtml(item) {
-  return `<img class="media-image" src="/media/${item.id}/image" alt="${escapeHtml(item.title)}" loading="lazy">`;
+// ブラウザに画像だけキャッシュさせるため)。会員の動画・画像一覧は/media/、素材ライブラリは/library/から配信されるため、
+// どちらのidかをsourceで区別する
+function imageDisplayHtml(item, source = 'media') {
+  return `<img class="media-image" src="/${source}/${item.id}/image" alt="${escapeHtml(item.title)}" loading="lazy">`;
 }
 
 // 自己完結型HTMLツール(呼吸法など)の表示。sandboxでスクリプトのみ許可し、ホスト側から隔離する
@@ -38,9 +39,9 @@ function htmlToolEmbedHtml(item) {
   return `<div class="html-embed"><iframe sandbox="allow-scripts" srcdoc="${escapeHtml(item.htmlContent || '')}"></iframe></div>`;
 }
 
-// 種類に応じた表示切り替え(動画・画像・HTMLツール)
-function mediaEmbedHtml(item) {
-  if (item.type === 'image') return imageDisplayHtml(item);
+// 種類に応じた表示切り替え(動画・画像・HTMLツール)。sourceは画像の配信元('media'=会員の一覧、'library'=素材ライブラリ)
+function mediaEmbedHtml(item, source = 'media') {
+  if (item.type === 'image') return imageDisplayHtml(item, source);
   if (item.type === 'html') return htmlToolEmbedHtml(item);
   return videoPlayerHtml(item);
 }
@@ -143,14 +144,18 @@ function libraryListHtml(library, { mode = 'manage', memberId, categories = [] }
             ${items
               .map(
                 (v) => `
-              <div class="lib-pick-row">
-                ${libraryThumbHtml(v)}
-                <div class="lib-pick-title">${escapeHtml(v.title)}</div>
+              <details class="lib-pick-item">
+                <summary class="lib-pick-row">
+                  ${libraryThumbHtml(v)}
+                  <div class="lib-pick-title">${escapeHtml(v.title)}</div>
+                  <span class="lib-pick-preview-hint">タップで確認</span>
+                </summary>
+                <div class="lib-pick-preview">${mediaEmbedHtml(v, 'library')}</div>
                 <form method="POST" action="/admin/members/${memberId}/media/from-library/${v.id}" class="lib-pick-form">
                   <input type="text" name="note" maxlength="200" placeholder="セット数・回数(任意)">
                   <button class="btn primary" type="submit">追加</button>
                 </form>
-              </div>`
+              </details>`
               )
               .join('')}
           </div>
@@ -184,7 +189,7 @@ function libraryListHtml(library, { mode = 'manage', memberId, categories = [] }
                   <button class="btn" type="submit">変更</button>
                 </form>
               </details>
-              ${mediaEmbedHtml(v)}
+              ${mediaEmbedHtml(v, 'library')}
             </div>`
             )
             .join('')}
@@ -420,12 +425,15 @@ function adminTopbar(label, backHref = '') {
     <span class="brand">${backHref ? `<a href="${backHref}">&larr; ${escapeHtml(label)}</a>` : escapeHtml(label)}</span>
     <div class="topbar-actions">
       <a href="/guide">📖 使い方ガイド</a>
+      <a href="/board">💬 みんなの掲示板</a>
       ${ADMIN_REFRESH_BTN}
       <form method="POST" action="/logout"><button type="submit">ログアウト</button></form>
     </div>
-  </div>
-  <div class="topbar-secondary"><a href="/board">💬 みんなの掲示板</a></div>`;
+  </div>`;
 }
+
+// ページ末尾に右寄せで置く「みんなの掲示板」へのリンク(会員側ページで使用)
+const BOARD_LINK_FOOTER = `<div class="board-link-footer"><a href="/board">💬 みんなの掲示板</a></div>`;
 
 function topbar(label, showLogout = true, showSiteTitle = false, settingsMenu = '') {
   return `<div class="topbar">
@@ -447,8 +455,7 @@ function topbar(label, showLogout = true, showSiteTitle = false, settingsMenu = 
       <a href="/guide">📖 使い方ガイド</a>
       ${showLogout ? `<form method="POST" action="/logout"><button type="submit">ログアウト</button></form>` : ''}
     </div>
-  </div>
-  <div class="topbar-secondary"><a href="/board">💬 みんなの掲示板</a></div>`;
+  </div>`;
 }
 
 // ガイド内の1項目(見出し+説明文)
@@ -499,7 +506,8 @@ function guidePage(userRole) {
       ${memberItems}
     </div>
 
-    ${userRole === 'admin' ? `<div class="card"><h3>🛠 管理者のみなさんへ</h3>${adminItems}</div>` : ''}`,
+    ${userRole === 'admin' ? `<div class="card"><h3>🛠 管理者のみなさんへ</h3>${adminItems}</div>` : ''}
+    ${BOARD_LINK_FOOTER}`,
   });
 }
 
@@ -942,14 +950,15 @@ function memberPage({
           <form method="POST" action="/logout"><button class="btn" type="submit">ログアウト</button></form>
         </div>
       </details>
-    </div>`,
+    </div>
+    ${BOARD_LINK_FOOTER}`,
   });
 }
 
 function memberPasswordPage({ userName, error, message }) {
   return layout({
     title: 'パスワード変更 | オンライン運動元気倶楽部',
-    topbar: `<div class="topbar"><span class="brand"><a href="/member">&larr; 戻る</a></span><div class="topbar-actions"><a href="/guide">📖 使い方ガイド</a><form method="POST" action="/logout"><button type="submit">ログアウト</button></form></div></div><div class="topbar-secondary"><a href="/board">💬 みんなの掲示板</a></div>`,
+    topbar: `<div class="topbar"><span class="brand"><a href="/member">&larr; 戻る</a></span><div class="topbar-actions"><a href="/guide">📖 使い方ガイド</a><form method="POST" action="/logout"><button type="submit">ログアウト</button></form></div></div>`,
     body: `
     ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
     <div class="card">
@@ -962,7 +971,8 @@ function memberPasswordPage({ userName, error, message }) {
         </div>
         <button class="btn primary" type="submit">変更する</button>
       </form>
-    </div>`,
+    </div>
+    ${BOARD_LINK_FOOTER}`,
   });
 }
 
@@ -1121,14 +1131,47 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
         <div class="stat-box"><div class="num">${total}</div><div class="label">累計実施回数</div></div>
       </div>
       <h3>${formatMonthJa(monthKeyForGrid)}のカレンダー</h3>
-      ${calendarNavHtml(calendarBasePath, prevMonthKey, nextMonthKey)}
-      ${gridHtml(grid)}
+      <div class="calendar-compact">
+        ${calendarNavHtml(calendarBasePath, prevMonthKey, nextMonthKey)}
+        ${gridHtml(grid)}
+      </div>
       <form method="POST" action="/admin/members/${member.id}/exclude-ranking" style="margin-top:14px;" onchange="this.requestSubmit()">
         <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem;color:var(--muted);cursor:pointer;">
           <input type="checkbox" name="excluded" value="1" ${member.excludeFromRanking ? 'checked' : ''}>
           ランキングに表示しない(スタッフのテスト用アカウントなど)
         </label>
       </form>
+    </div>
+
+    <div class="card">
+      <h3>実施した日</h3>
+      ${historyListHtml(checkinRecords)}
+    </div>
+
+    <div class="card">
+      <h3>月間目標(月${MONTHLY_GOAL}回 × ${REWARD_MONTHS}ヶ月継続で特典)</h3>
+      <div class="stat-row">
+        <div class="stat-box"><div class="num">${monthCount}/${MONTHLY_GOAL}</div><div class="label">今月</div></div>
+        <div class="stat-box"><div class="num">${monthlyStreak}ヶ月</div><div class="label">目標達成 連続月数</div></div>
+        <div class="stat-box"><div class="num">${rewardsGiven}/${rewardsEarned}</div><div class="label">特典 渡し済み/獲得済み</div></div>
+      </div>
+      <canvas id="monthlyChart" height="110"></canvas>
+      ${
+        rewardsPending > 0
+          ? `<form method="POST" action="/admin/members/${member.id}/reward" onsubmit="return confirm('${escapeHtml(member.name)}さんに特典を渡しましたか?');" style="margin-top:12px;">
+              <button class="btn primary" type="submit">🎁 特典を渡す(残${rewardsPending})</button>
+             </form>`
+          : `<p style="font-size:0.85rem;color:var(--muted);margin-top:12px;">現在、未受け渡しの特典はありません。</p>`
+      }
+    </div>
+
+    <div class="card">
+      <h3>バッジコレクション</h3>
+      ${badgeRowHtml(badges)}
+      <details class="lib-category-group" style="margin-top:14px;">
+        <summary class="lib-category-heading">🎖 ランクアップ履歴</summary>
+        ${badgeLogHtml(badgeLog)}
+      </details>
     </div>
 
     <div class="card" id="video">
@@ -1190,20 +1233,6 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
       }
     </div>
 
-    <div class="card">
-      <h3>実施した日</h3>
-      ${historyListHtml(checkinRecords)}
-    </div>
-
-    <div class="card">
-      <h3>バッジコレクション</h3>
-      ${badgeRowHtml(badges)}
-      <details class="lib-category-group" style="margin-top:14px;">
-        <summary class="lib-category-heading">🎖 ランクアップ履歴</summary>
-        ${badgeLogHtml(badgeLog)}
-      </details>
-    </div>
-
     <div class="card" id="messages">
       <h3>📩 ${escapeHtml(member.name)} さんとのメッセージ</h3>
       ${messageThreadHtml(messages, { viewerRole: 'admin', deleteBasePath: `/admin/members/${member.id}/messages` })}
@@ -1214,23 +1243,6 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
         </div>
         <button class="btn primary" type="submit">送信</button>
       </form>
-    </div>
-
-    <div class="card">
-      <h3>月間目標(月${MONTHLY_GOAL}回 × ${REWARD_MONTHS}ヶ月継続で特典)</h3>
-      <div class="stat-row">
-        <div class="stat-box"><div class="num">${monthCount}/${MONTHLY_GOAL}</div><div class="label">今月</div></div>
-        <div class="stat-box"><div class="num">${monthlyStreak}ヶ月</div><div class="label">目標達成 連続月数</div></div>
-        <div class="stat-box"><div class="num">${rewardsGiven}/${rewardsEarned}</div><div class="label">特典 渡し済み/獲得済み</div></div>
-      </div>
-      <canvas id="monthlyChart" height="110"></canvas>
-      ${
-        rewardsPending > 0
-          ? `<form method="POST" action="/admin/members/${member.id}/reward" onsubmit="return confirm('${escapeHtml(member.name)}さんに特典を渡しましたか?');" style="margin-top:12px;">
-              <button class="btn primary" type="submit">🎁 特典を渡す(残${rewardsPending})</button>
-             </form>`
-          : `<p style="font-size:0.85rem;color:var(--muted);margin-top:12px;">現在、未受け渡しの特典はありません。</p>`
-      }
     </div>
 
     <div class="card">
