@@ -356,47 +356,60 @@ const MEDIA_REORDER_SCRIPT = `
 `;
 
 // 会員TOPページ専用: 下に引っ張って更新するジェスチャー(プルアンドフレッシュ)
+// 「引っ張り中」かどうかはtouchstartの時点(スクロール位置が一番上)だけで判定する。
+// 途中のtouchmoveのたびにwindow.scrollYを再チェックしていると、インジケーターの高さが
+// 変わることによる端末側の微妙なスクロール位置のブレで「引っ張り中」判定が途切れてしまい、
+// 「離して更新」の表示は出るのに指を離しても更新が始まらない、という不具合につながっていた
 const PULL_TO_REFRESH_SCRIPT = `
 (function () {
   var threshold = 70;
   var pulling = false;
   var startY = 0;
+  var currentPull = 0;
   var indicator = document.createElement('div');
   indicator.className = 'ptr-indicator';
   indicator.textContent = '↓ 引っ張って更新';
   document.body.insertBefore(indicator, document.body.firstChild);
+  function resetIndicator() {
+    currentPull = 0;
+    indicator.style.height = '0px';
+    indicator.style.opacity = '0';
+    indicator.textContent = '↓ 引っ張って更新';
+  }
   document.addEventListener('touchstart', function (e) {
     if (window.scrollY === 0) {
       startY = e.touches[0].clientY;
       pulling = true;
+      currentPull = 0;
     }
   }, { passive: true });
   document.addEventListener('touchmove', function (e) {
     if (!pulling) return;
     var diff = e.touches[0].clientY - startY;
-    if (diff > 0 && window.scrollY === 0) {
-      var pull = Math.min(diff, 100);
-      indicator.style.height = pull + 'px';
-      indicator.style.opacity = Math.min(pull / threshold, 1);
-      indicator.textContent = pull > threshold ? '↑ 離して更新' : '↓ 引っ張って更新';
-    } else {
-      pulling = false;
+    if (diff <= 0) {
+      // 指を戻した場合は見た目だけ縮めておく(引っ張り自体はtouchendまで継続扱いにする)
+      resetIndicator();
+      return;
     }
+    currentPull = Math.min(diff, 100);
+    indicator.style.height = currentPull + 'px';
+    indicator.style.opacity = Math.min(currentPull / threshold, 1);
+    indicator.textContent = currentPull > threshold ? '↑ 離して更新' : '↓ 引っ張って更新';
   }, { passive: true });
-  document.addEventListener('touchend', function () {
+  function finishPull() {
     if (!pulling) return;
     pulling = false;
-    var height = parseInt(indicator.style.height || '0', 10);
-    if (height > threshold) {
+    if (currentPull > threshold) {
       indicator.textContent = '更新中...';
       indicator.style.height = '40px';
       indicator.style.opacity = '1';
       location.reload();
     } else {
-      indicator.style.height = '0px';
-      indicator.style.opacity = '0';
+      resetIndicator();
     }
-  }, { passive: true });
+  }
+  document.addEventListener('touchend', finishPull, { passive: true });
+  document.addEventListener('touchcancel', finishPull, { passive: true });
 })();
 `;
 
@@ -406,8 +419,8 @@ function adminTopbar(label, backHref = '') {
   return `<div class="topbar">
     <span class="brand">${backHref ? `<a href="${backHref}">&larr; ${escapeHtml(label)}</a>` : escapeHtml(label)}</span>
     <div class="topbar-actions">
-      <a href="/board">💬 みんなの掲示板</a>
-      <a href="/guide">📖 使い方ガイド</a>
+      <a href="/board">💬<span class="topbar-link-label"> みんなの掲示板</span></a>
+      <a href="/guide">📖<span class="topbar-link-label"> 使い方ガイド</span></a>
       ${ADMIN_REFRESH_BTN}
       <form method="POST" action="/logout"><button type="submit">ログアウト</button></form>
     </div>
@@ -431,8 +444,8 @@ function topbar(label, showLogout = true, showSiteTitle = false, settingsMenu = 
       </span>
     </span>
     <div class="topbar-actions">
-      <a href="/board">💬 みんなの掲示板</a>
-      <a href="/guide">📖 使い方ガイド</a>
+      <a href="/board">💬<span class="topbar-link-label"> みんなの掲示板</span></a>
+      <a href="/guide">📖<span class="topbar-link-label"> 使い方ガイド</span></a>
       ${showLogout ? `<form method="POST" action="/logout"><button type="submit">ログアウト</button></form>` : ''}
     </div>
   </div>`;
@@ -450,7 +463,7 @@ function guidePage(userRole) {
     guideItem('🎥 専用トレーニング', '担当のアドバイザーが登録してくれた動画・画像・呼吸法ツールを確認しながら取り組めます。セット数や回数の目安が書かれている場合はその下に表示されます。'),
     guideItem('📅 カレンダー・実施記録', '過去に実施した日をカレンダーで振り返れます。実施した日の記録は日付をタップすると、その日のメモを自由に書き込めます。'),
     guideItem('🏅 バッジ(ランク)', '累計の実施日数に応じて、ビギナーからレジェンドまでバッジが増えていきます。新しいバッジを獲得するとお祝いメッセージが表示されます。'),
-    guideItem('🎁 メニュー更新特典', '月の目標回数を複数ヶ月連続で達成すると、アドバイザーにメニュー更新を相談できる特典がもらえます。進み具合はトップページで確認できます。'),
+    guideItem('🎁 メニュー更新特典', '月の目標回数を3ヶ月連続で達成すると、メニュー更新の特典が受けられます。進み具合はトップページで確認できます。'),
     guideItem('📩 メッセージ', 'アドバイザーに直接メッセージを送れます。やり取りは常に一番新しいものが見える状態で開きます。過去のものは枠内を上にスクロールすると読めます。'),
     guideItem('🏆 ランキング', '今月の実施回数の順位(上位3名)を確認できます。'),
     guideItem('⚙️ 設定', '「設定」を開くと、会員ページに表示する名前(表示名)やログインパスワードを自分で変更できます。'),
@@ -917,7 +930,7 @@ function memberPage({
 function memberPasswordPage({ userName, error, message }) {
   return layout({
     title: 'パスワード変更 | オンライン運動元気倶楽部',
-    topbar: `<div class="topbar"><span class="brand"><a href="/member">&larr; 戻る</a></span><div class="topbar-actions"><a href="/board">💬 みんなの掲示板</a><a href="/guide">📖 使い方ガイド</a><form method="POST" action="/logout"><button type="submit">ログアウト</button></form></div></div>`,
+    topbar: `<div class="topbar"><span class="brand"><a href="/member">&larr; 戻る</a></span><div class="topbar-actions"><a href="/board">💬<span class="topbar-link-label"> みんなの掲示板</span></a><a href="/guide">📖<span class="topbar-link-label"> 使い方ガイド</span></a><form method="POST" action="/logout"><button type="submit">ログアウト</button></form></div></div>`,
     body: `
     ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
     <div class="card">

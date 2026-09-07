@@ -743,8 +743,11 @@ summary.lib-category-heading::marker { color: var(--primary); }
   .badge-item .icon { font-size: 1.5rem; }
   .checkin-btn { padding: 16px; font-size: 1rem; }
   th, td { padding: 8px 6px; font-size: 0.85rem; }
-  .topbar { flex-wrap: wrap; gap: 8px; }
-  .topbar-actions { gap: 10px; }
+  .topbar { flex-wrap: nowrap; gap: 8px; }
+  .topbar .brand { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .topbar-actions { gap: 10px; flex-shrink: 0; }
+  /* 掲示板・ガイドはアイコンだけにして、名前と同じ行・右側に収まるようにする */
+  .topbar-link-label { display: none; }
   .msg-bubble { max-width: 92%; }
   .board-reply { margin-left: 8px; }
 }
