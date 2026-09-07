@@ -1,5 +1,5 @@
 // HTMLをテンプレートエンジンなしで生成する(外部依存なし)
-const { MONTHLY_GOAL, REWARD_MONTHS, MAX_MEMBER_MEDIA, MAX_LIBRARY_ITEMS, DEFAULT_LIBRARY_CATEGORY, MAX_LIBRARY_CATEGORIES, STREAK_BADGES } = require('./stats');
+const { MONTHLY_GOAL, REWARD_MONTHS, MAX_MEMBER_MEDIA, MAX_LIBRARY_ITEMS, DEFAULT_LIBRARY_CATEGORY, MAX_LIBRARY_CATEGORIES, STREAK_BADGES, monthKey } = require('./stats');
 const CHART_JS = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js';
 
 function escapeHtml(str) {
@@ -419,12 +419,12 @@ function adminTopbar(label, backHref = '') {
   return `<div class="topbar">
     <span class="brand">${backHref ? `<a href="${backHref}">&larr; ${escapeHtml(label)}</a>` : escapeHtml(label)}</span>
     <div class="topbar-actions">
-      <a href="/board">💬<span class="topbar-link-label"> みんなの掲示板</span></a>
-      <a href="/guide">📖<span class="topbar-link-label"> 使い方ガイド</span></a>
+      <a href="/guide">📖 使い方ガイド</a>
       ${ADMIN_REFRESH_BTN}
       <form method="POST" action="/logout"><button type="submit">ログアウト</button></form>
     </div>
-  </div>`;
+  </div>
+  <div class="topbar-secondary"><a href="/board">💬 みんなの掲示板</a></div>`;
 }
 
 function topbar(label, showLogout = true, showSiteTitle = false, settingsMenu = '') {
@@ -444,11 +444,11 @@ function topbar(label, showLogout = true, showSiteTitle = false, settingsMenu = 
       </span>
     </span>
     <div class="topbar-actions">
-      <a href="/board">💬<span class="topbar-link-label"> みんなの掲示板</span></a>
-      <a href="/guide">📖<span class="topbar-link-label"> 使い方ガイド</span></a>
+      <a href="/guide">📖 使い方ガイド</a>
       ${showLogout ? `<form method="POST" action="/logout"><button type="submit">ログアウト</button></form>` : ''}
     </div>
-  </div>`;
+  </div>
+  <div class="topbar-secondary"><a href="/board">💬 みんなの掲示板</a></div>`;
 }
 
 // ガイド内の1項目(見出し+説明文)
@@ -573,43 +573,62 @@ function calendarNavHtml(basePath, prevMonthKey, nextMonthKey) {
 
 // 実施した日を新しい順に一覧表示する(「何月何日にできたか」がひと目で分かるように)
 // checkinRecords: [{date, note}, ...]。editable=trueだと各行にメモの追加・編集フォームを出す(本人のみ)
-function historyListHtml(checkinRecords, { limit = 30, editable = false } = {}) {
+// 実施した日の一覧を月ごとにグループ化し、それぞれ折りたたみ表示にする(直近の月だけ開いた状態)
+function historyListHtml(checkinRecords, { editable = false } = {}) {
   if (!checkinRecords.length) {
     return '<p style="font-size:0.85rem;color:var(--muted);margin:0;">まだ記録がありません</p>';
   }
   const sortedDesc = [...checkinRecords].sort((a, b) => b.date.localeCompare(a.date));
-  const shown = sortedDesc.slice(0, limit);
-  const items = shown
-    .map((c) => {
-      const note = c.note || '';
-      if (editable) {
-        return `
-        <li>
-          <details class="history-item">
-            <summary class="history-date">
-              <span>${formatDateJa(c.date)}</span>
-              ${note ? `<span class="history-note-preview">${escapeHtml(note)}</span>` : ''}
-            </summary>
-            <form method="POST" action="/member/checkins/${c.date}/note" class="inline-form" style="margin-top:8px;">
-              <div class="form-row">
-                <textarea name="note" rows="2" maxlength="300" placeholder="例: スクワット3セット×10回、ベンチプレス...">${escapeHtml(note)}</textarea>
-              </div>
-              <button class="btn" type="submit">保存</button>
-            </form>
-          </details>
-        </li>`;
-      }
+  const groups = [];
+  const groupByMonth = new Map();
+  sortedDesc.forEach((c) => {
+    const mKey = monthKey(c.date);
+    let group = groupByMonth.get(mKey);
+    if (!group) {
+      group = { month: mKey, records: [] };
+      groupByMonth.set(mKey, group);
+      groups.push(group);
+    }
+    group.records.push(c);
+  });
+
+  const dayItemHtml = (c) => {
+    const note = c.note || '';
+    if (editable) {
       return `
       <li>
-        <div class="history-row">
-          <span>${formatDateJa(c.date)}</span>
-          ${note ? `<div class="history-note">${escapeHtml(note)}</div>` : ''}
-        </div>
+        <details class="history-item">
+          <summary class="history-date">
+            <span>${formatDateJa(c.date)}</span>
+            ${note ? `<span class="history-note-preview">${escapeHtml(note)}</span>` : ''}
+          </summary>
+          <form method="POST" action="/member/checkins/${c.date}/note" class="inline-form" style="margin-top:8px;">
+            <div class="form-row">
+              <textarea name="note" rows="2" maxlength="300" placeholder="例: スクワット3セット×10回、ベンチプレス...">${escapeHtml(note)}</textarea>
+            </div>
+            <button class="btn" type="submit">保存</button>
+          </form>
+        </details>
       </li>`;
-    })
+    }
+    return `
+    <li>
+      <div class="history-row">
+        <span>${formatDateJa(c.date)}</span>
+        ${note ? `<div class="history-note">${escapeHtml(note)}</div>` : ''}
+      </div>
+    </li>`;
+  };
+
+  return groups
+    .map(
+      (g, i) => `
+    <details class="lib-category-group" ${i === 0 ? 'open' : ''}>
+      <summary class="lib-category-heading">${formatMonthJa(g.month)} <span style="font-weight:400;opacity:0.85;">(${g.records.length}回)</span></summary>
+      <ul class="history-list">${g.records.map(dayItemHtml).join('')}</ul>
+    </details>`
+    )
     .join('');
-  const more = sortedDesc.length > limit ? `<p style="font-size:0.8rem;color:var(--muted);margin:8px 0 0;">他${sortedDesc.length - limit}件</p>` : '';
-  return `<ul class="history-list">${items}</ul>${more}`;
 }
 
 // 獲得ランクのログ("いつ達成したか"の一覧、新しい順)
@@ -930,7 +949,7 @@ function memberPage({
 function memberPasswordPage({ userName, error, message }) {
   return layout({
     title: 'パスワード変更 | オンライン運動元気倶楽部',
-    topbar: `<div class="topbar"><span class="brand"><a href="/member">&larr; 戻る</a></span><div class="topbar-actions"><a href="/board">💬<span class="topbar-link-label"> みんなの掲示板</span></a><a href="/guide">📖<span class="topbar-link-label"> 使い方ガイド</span></a><form method="POST" action="/logout"><button type="submit">ログアウト</button></form></div></div>`,
+    topbar: `<div class="topbar"><span class="brand"><a href="/member">&larr; 戻る</a></span><div class="topbar-actions"><a href="/guide">📖 使い方ガイド</a><form method="POST" action="/logout"><button type="submit">ログアウト</button></form></div></div><div class="topbar-secondary"><a href="/board">💬 みんなの掲示板</a></div>`,
     body: `
     ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
     <div class="card">
