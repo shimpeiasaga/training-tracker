@@ -494,7 +494,9 @@ function guidePage(userRole) {
 
   return layout({
     title: '使い方ガイド | オンライン運動元気倶楽部',
-    topbar: `<div class="topbar"><span class="brand"><a href="${userRole === 'admin' ? '/admin' : '/member'}">&larr; 戻る</a></span></div>`,
+    topbar: `<div class="topbar"><span class="brand"><a href="${userRole === 'admin' ? '/admin' : '/member'}">&larr; 戻る</a></span>${
+      userRole === 'admin' ? '<div class="topbar-actions"><a href="/board">💬 みんなの掲示板</a></div>' : ''
+    }</div>`,
     body: `
     <div class="card">
       <h2>📖 使い方ガイド</h2>
@@ -507,7 +509,7 @@ function guidePage(userRole) {
     </div>
 
     ${userRole === 'admin' ? `<div class="card"><h3>🛠 管理者のみなさんへ</h3>${adminItems}</div>` : ''}
-    ${BOARD_LINK_FOOTER}`,
+    ${userRole === 'admin' ? '' : BOARD_LINK_FOOTER}`,
   });
 }
 
