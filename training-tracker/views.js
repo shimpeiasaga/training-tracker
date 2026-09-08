@@ -517,7 +517,7 @@ function guidePage(userRole) {
         <h4>🍎 iPhone(Safari)の場合</h4>
         <ol style="margin:8px 0 0;padding-left:20px;font-size:0.88rem;color:var(--text);line-height:1.8;">
           <li>Safariでこのサイトを開く</li>
-          <li>画面下にある「共有」ボタン(四角から上に矢印が出ているマーク)をタップ</li>
+          <li>「共有」ボタン(四角から上に矢印が出ているマーク)をタップ。画面下にある場合と、上のURL欄の右横にある場合があります</li>
           <li>出てきたメニューを下にスクロールして「ホーム画面に追加」をタップ</li>
           <li>右上の「追加」をタップすれば完了です</li>
         </ol>
