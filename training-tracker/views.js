@@ -246,10 +246,10 @@ document.addEventListener('submit', function (e) {
   btn.textContent = btn.textContent.trim() === '送信' ? '送信中...' : '処理中...';
 });
 
-// フォームの送信ボタン以外(「詳細」などリンクの<a class="btn">、更新ボタンなど)も
-// クリック直後に見た目を変えて「押せている」ことが分かるようにする
+// フォームの送信ボタン以外(「詳細」などリンクの<a class="btn">、更新ボタン、
+// トップバーの「戻る」リンクなど)も、クリック直後に見た目を変えて「押せている」ことが分かるようにする
 document.addEventListener('click', function (e) {
-  var link = e.target.closest('a.btn');
+  var link = e.target.closest('a.btn, .topbar .brand a');
   if (!link || link.target === '_blank' || link.dataset.loading === '1') return;
   link.dataset.loading = '1';
   var original = link.textContent;
@@ -531,9 +531,7 @@ function guidePage(userRole) {
           <li>表示された「追加」または「インストール」をタップすれば完了です</li>
         </ol>
       </div>
-    </div>
-
-    ${userRole === 'admin' ? '' : BOARD_LINK_FOOTER}`,
+    </div>`,
   });
 }
 
@@ -962,22 +960,24 @@ function memberPage({
     </div>
 
     <div class="card">
-      <details class="settings-collapse">
-        <summary class="btn">設定</summary>
-        <div class="settings-collapse-menu">
-          <form method="POST" action="/member/display-name" class="inline-form" style="margin:0;">
-            <div class="form-row">
-              <label>表示名</label>
-              <input type="text" name="displayName" maxlength="20" value="${escapeHtml(userName)}" required>
-            </div>
-            <button class="btn" type="submit">表示名を保存</button>
-          </form>
-          <a class="btn" href="/member/password">パスワード変更</a>
-          <form method="POST" action="/logout"><button class="btn" type="submit">ログアウト</button></form>
-        </div>
-      </details>
-    </div>
-    ${BOARD_LINK_FOOTER}`,
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">
+        <details class="settings-collapse">
+          <summary class="btn">設定</summary>
+          <div class="settings-collapse-menu">
+            <form method="POST" action="/member/display-name" class="inline-form" style="margin:0;">
+              <div class="form-row">
+                <label>表示名</label>
+                <input type="text" name="displayName" maxlength="20" value="${escapeHtml(userName)}" required>
+              </div>
+              <button class="btn" type="submit">表示名を保存</button>
+            </form>
+            <a class="btn" href="/member/password">パスワード変更</a>
+            <form method="POST" action="/logout"><button class="btn" type="submit">ログアウト</button></form>
+          </div>
+        </details>
+        <a href="/board" style="font-size:0.85rem;color:var(--primary);text-decoration:none;white-space:nowrap;">💬 みんなの掲示板</a>
+      </div>
+    </div>`,
   });
 }
 
