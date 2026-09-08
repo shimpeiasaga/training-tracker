@@ -960,7 +960,7 @@ function memberPage({
     </div>
 
     <div class="card">
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
         <details class="settings-collapse">
           <summary class="btn">設定</summary>
           <div class="settings-collapse-menu">
@@ -975,7 +975,7 @@ function memberPage({
             <form method="POST" action="/logout"><button class="btn" type="submit">ログアウト</button></form>
           </div>
         </details>
-        <a href="/board" style="font-size:0.85rem;color:var(--primary);text-decoration:none;white-space:nowrap;">💬 みんなの掲示板</a>
+        <a href="/board" style="font-size:1rem;color:var(--primary);text-decoration:none;white-space:nowrap;">💬 みんなの掲示板</a>
       </div>
     </div>`,
   });
