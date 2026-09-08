@@ -509,6 +509,30 @@ function guidePage(userRole) {
     </div>
 
     ${userRole === 'admin' ? `<div class="card"><h3>🛠 管理者のみなさんへ</h3>${adminItems}</div>` : ''}
+
+    <div class="card">
+      <h3>📱 ホーム画面に追加する方法</h3>
+      <p style="font-size:0.9rem;color:var(--muted);margin:0 0 12px;">ホーム画面に追加しておくと、アプリのようにアイコンをタップするだけで開けるようになります。</p>
+      <div class="guide-item">
+        <h4>🍎 iPhone(Safari)の場合</h4>
+        <ol style="margin:8px 0 0;padding-left:20px;font-size:0.88rem;color:var(--text);line-height:1.8;">
+          <li>Safariでこのサイトを開く</li>
+          <li>画面下にある「共有」ボタン(四角から上に矢印が出ているマーク)をタップ</li>
+          <li>出てきたメニューを下にスクロールして「ホーム画面に追加」をタップ</li>
+          <li>右上の「追加」をタップすれば完了です</li>
+        </ol>
+      </div>
+      <div class="guide-item">
+        <h4>🤖 Androidの場合</h4>
+        <ol style="margin:8px 0 0;padding-left:20px;font-size:0.88rem;color:var(--text);line-height:1.8;">
+          <li>Chromeでこのサイトを開く</li>
+          <li>右上にある「⋮」(縦に3つ並んだ点)のメニューをタップ</li>
+          <li>「ホーム画面に追加」または「アプリをインストール」をタップ</li>
+          <li>表示された「追加」または「インストール」をタップすれば完了です</li>
+        </ol>
+      </div>
+    </div>
+
     ${userRole === 'admin' ? '' : BOARD_LINK_FOOTER}`,
   });
 }
