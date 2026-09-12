@@ -157,7 +157,7 @@ async function handleRequest(req, res) {
     }
     const newSid = sess.generateSessionId();
     await db.createSession(newSid, { id: u.id, name: u.name, username: u.username, role: u.role });
-    return redirect(res, '/', { 'Set-Cookie': sess.cookieHeader(newSid, 60 * 60 * 24 * 30) });
+    return redirect(res, '/', { 'Set-Cookie': sess.cookieHeader(newSid, 60 * 60 * 24 * 365 * 10) }); // 10年(実質無期限)
   }
 
   if (method === 'POST' && pathname === '/logout') {

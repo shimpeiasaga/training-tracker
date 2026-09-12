@@ -88,7 +88,7 @@ function save(data) {
 }
 
 // --- ログインセッション(サーバー再起動をまたいでもログイン状態を保つためファイルに保存する) ---
-const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30日
+const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 365 * 10; // 10年(実質無期限)
 
 function createSession(id, user) {
   const data = load();
