@@ -1348,6 +1348,7 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
         <div class="stat-box"><div class="num">${monthlyStreak}ヶ月</div><div class="label">目標達成 連続月数</div></div>
         <div class="stat-box"><div class="num">${rewardsGiven}/${rewardsEarned}</div><div class="label">特典 渡し済み/獲得済み</div></div>
       </div>
+      ${menuUpdateCardHtml({ monthlyStreak, rewardMonths: REWARD_MONTHS })}
       <canvas id="monthlyChart" height="110"></canvas>
       ${
         rewardsPending > 0
