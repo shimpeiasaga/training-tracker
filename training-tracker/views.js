@@ -237,8 +237,8 @@ ${extraScript ? `<script>${extraScript}</script>` : ''}
 
 // ボタンを押した直後、通信のラグで「押せているか分からない」状態を防ぐため、
 // 送信ボタンを一時的に無効化してテキストを変える(全ページ共通)。
-// メッセージ送信系のボタン(文言が「送信」)は「送信中...」、トレーニング完了チェックのボタンは「記録中...」、
-// それ以外は「処理中...」にする
+// メッセージ送信系のボタン(文言が「送信」)は「送信中...」、トレーニング完了チェックのボタンは
+// 記録する時は「記録中...」・取り消す時(checkedクラスが付いている)は「処理中...」、それ以外は「処理中...」にする
 const BUTTON_LOADING_SCRIPT = `
 document.addEventListener('submit', function (e) {
   // confirm()で「キャンセル」された送信(削除確認など)はここでdefaultPreventedになるので何もしない。
@@ -253,7 +253,7 @@ document.addEventListener('submit', function (e) {
   var label = btn.textContent.trim();
   btn.textContent = label === '送信'
     ? '送信中...'
-    : btn.classList.contains('checkin-btn')
+    : btn.classList.contains('checkin-btn') && !btn.classList.contains('checked')
     ? '記録中...'
     : '処理中...';
 });
@@ -569,7 +569,7 @@ function guidePage(userRole) {
     guideItem('📩 メッセージ', 'アドバイザーに直接メッセージを送れます。やり取りは常に一番新しいものが見える状態で開きます。過去のものは枠内を上にスクロールすると読めます。'),
     guideItem('🏆 ランキング', '今月の実施回数の順位(上位3名)を確認できます。'),
     guideItem('⚙️ 設定', '「設定」を開くと、会員ページに表示する名前(表示名)やログインパスワードを自分で変更できます。'),
-    guideItem('🔔 通知を受け取る', '「設定」の中にある「🔔 通知を受け取る」を押すと、アドバイザーからメッセージが届いた時にスマホへ通知が来るようになります。iPhoneの場合は、先に「ホーム画面に追加」した上で、そのアイコンから開いた状態でボタンを押してください(使い方は下の「ホーム画面に追加する方法」を参照)。'),
+    guideItem('🔔 通知を受け取る', 'このページの下の方にある「🔔 通知を受け取る」を押すと、アドバイザーからメッセージが届いた時にスマホへ通知が来るようになります。iPhoneの場合は、先に「ホーム画面に追加」した上で、そのアイコンから開いた状態でボタンを押してください。'),
     guideItem('💬 みんなの掲示板', '会員同士が自由に投稿・交流できる場所です。返信ができるのはアドバイザー(管理者)のみです。'),
   ].join('');
 
@@ -628,6 +628,16 @@ function guidePage(userRole) {
           <li>表示された「追加」または「インストール」をタップすれば完了です</li>
         </ol>
       </div>
+    </div>
+
+    <div class="card">
+      <h3>🔔 通知を受け取る</h3>
+      <p style="font-size:0.9rem;color:var(--muted);margin:0 0 12px;">${
+        userRole === 'admin'
+          ? '会員からメッセージが届いた時に、スマホへ通知が来るようになります。'
+          : 'アドバイザーからメッセージが届いた時に、スマホへ通知が来るようになります。'
+      }iPhoneの場合は、上の「ホーム画面に追加する方法」を先に済ませてから、そのアイコンで開いた状態で下のボタンを押してください。</p>
+      ${PUSH_ENABLE_BUTTON}
     </div>`,
   });
 }
@@ -787,7 +797,7 @@ function messageThreadHtml(messages, { viewerRole, deleteBasePath } = {}) {
       (m) => `
       <div class="msg-bubble ${m.senderRole === 'admin' ? 'from-admin' : 'from-member'}">
         <div class="msg-meta">
-          <span>${escapeHtml(m.senderName)} ・ ${escapeHtml(m.createdAt)}</span>
+          <span>${escapeHtml(viewerRole === 'member' && m.senderRole === 'admin' ? 'アドバイザー' : m.senderName)} ・ ${escapeHtml(m.createdAt)}</span>
           ${
             viewerRole && deleteBasePath && m.senderRole === viewerRole
               ? `<form method="POST" action="${deleteBasePath}/${m.id}/delete" style="display:inline;" onsubmit="return confirm('このメッセージを削除しますか？');">
@@ -1069,7 +1079,6 @@ function memberPage({
               <button class="btn" type="submit">表示名を保存</button>
             </form>
             <a class="btn" href="/member/password">パスワード変更</a>
-            ${PUSH_ENABLE_BUTTON}
             <form method="POST" action="/logout"><button class="btn" type="submit">ログアウト</button></form>
           </div>
         </details>
@@ -1147,7 +1156,13 @@ function adminPage({ members, ranked, error, message, unreadMembers = [], rankUp
     ${message ? `<div class="message">${escapeHtml(message)}</div>` : ''}
 
     <div class="card">
-      <a class="btn" href="/admin/library">🎥📷 素材ライブラリを管理</a>
+      <h3>会員を追加</h3>
+      <form method="POST" action="/admin/members" class="inline-form">
+        <div class="form-row"><label>名前</label><input type="text" name="name" required></div>
+        <div class="form-row"><label>ユーザー名</label><input type="text" name="username" required></div>
+        <div class="form-row"><label>初期パスワード</label><input type="text" name="password" required minlength="4"></div>
+        <button class="btn primary" type="submit">追加</button>
+      </form>
     </div>
 
     <div class="card">
@@ -1169,13 +1184,7 @@ function adminPage({ members, ranked, error, message, unreadMembers = [], rankUp
     </div>
 
     <div class="card">
-      <h3>会員を追加</h3>
-      <form method="POST" action="/admin/members" class="inline-form">
-        <div class="form-row"><label>名前</label><input type="text" name="name" required></div>
-        <div class="form-row"><label>ユーザー名</label><input type="text" name="username" required></div>
-        <div class="form-row"><label>初期パスワード</label><input type="text" name="password" required minlength="4"></div>
-        <button class="btn primary" type="submit">追加</button>
-      </form>
+      <a class="btn" href="/admin/library">🎥📷 素材ライブラリを管理</a>
     </div>
 
     <div class="card">
