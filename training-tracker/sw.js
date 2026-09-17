@@ -29,8 +29,17 @@ self.addEventListener('push', function (event) {
   //
   // アプリを開いていない(バックグラウンド・完全に閉じている)状態で通知が届いた場合、
   // ページ側のスクリプト(setAppBadge)は一切実行されないため、アイコンの赤丸がいつまでも
-  // つかない。そのためservice worker自身からもバッジを立てておき、実際にアプリを開いた時に
-  // ページ側の正しい件数で上書き・解除されるようにする
+  // つかない。そのためservice worker自身からもバッジを立てておく(iOS16.4+/Androidで対応、
+  // 非対応環境では何もしない)。数はサーバーから渡された実際の未読件数(badgeCount)を使う
+  var badgePromise = Promise.resolve();
+  if (self.navigator && 'setAppBadge' in self.navigator && typeof data.badgeCount === 'number') {
+    badgePromise =
+      data.badgeCount > 0
+        ? self.navigator.setAppBadge(data.badgeCount).catch(function () {})
+        : self.navigator.clearAppBadge
+        ? self.navigator.clearAppBadge().catch(function () {})
+        : Promise.resolve();
+  }
   event.waitUntil(
     Promise.all([
       self.registration.showNotification(title, options),
@@ -39,7 +48,7 @@ self.addEventListener('push', function (event) {
           client.postMessage({ type: 'push-refresh' });
         });
       }),
-      self.navigator && self.navigator.setAppBadge ? self.navigator.setAppBadge(1).catch(function () {}) : Promise.resolve(),
+      badgePromise,
     ])
   );
 });
@@ -47,13 +56,28 @@ self.addEventListener('push', function (event) {
 // 通知をタップしたら、既に開いているタブがあればそれを使い、無ければ新しく開く
 self.addEventListener('notificationclick', function (event) {
   event.notification.close();
-  var url = (event.notification.data && event.notification.data.url) || '/';
+  var rawUrl = (event.notification.data && event.notification.data.url) || '/';
+  // #messagesのようにハッシュ部分だけが違うURLだと、ブラウザによっては再読み込みを省略して
+  // スクロールするだけになり、メッセージが最新化されないことがある。
+  // 毎回変わる値をクエリに付けて、常に「新しいURL」として扱われる=必ず読み込み直させるようにする
+  var hashIndex = rawUrl.indexOf('#');
+  var path = hashIndex === -1 ? rawUrl : rawUrl.slice(0, hashIndex);
+  var hash = hashIndex === -1 ? '' : rawUrl.slice(hashIndex);
+  var sep = path.indexOf('?') === -1 ? '?' : '&';
+  var url = path + sep + '_t=' + Date.now() + hash;
+
   event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (clientList) {
-      for (var i = 0; i < clientList.length; i++) {
-        var client = clientList[i];
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (windowClients) {
+      for (var i = 0; i < windowClients.length; i++) {
+        var client = windowClients[i];
+        if ('navigate' in client) {
+          // navigate()の完了を待たずにfocus()すると、iOSでは再読み込みの途中でservice workerが
+          // 終了してしまい反映されないことがあるため、navigate()の完了を待ってからfocus()する
+          return client.navigate(url).then(function (navigatedClient) {
+            return navigatedClient ? navigatedClient.focus() : client.focus();
+          });
+        }
         if ('focus' in client) {
-          client.navigate(url);
           return client.focus();
         }
       }
