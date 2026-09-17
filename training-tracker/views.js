@@ -957,7 +957,9 @@ function monthlyProgressHtml({ monthCount, monthGoal, monthlyStreak, rewardMonth
 
 // 月間目標をrewardMonths連続で達成すると「メニュー更新」の対象になる、という進捗をスタンプカード風に見せる
 // (達成した月にはハンコ(✓)が押され、間の線もつながって進み具合がひと目で分かる)
-function menuUpdateCardHtml({ monthlyStreak, rewardMonths }) {
+// showMessage: 会員向けの語りかけ文言(「あと◯ヶ月で...」等)を表示するか。
+// 管理画面ではスタンプ(進捗)だけ見せたいのでfalseにする
+function menuUpdateCardHtml({ monthlyStreak, rewardMonths, showMessage = true }) {
   const cyclePos = monthlyStreak % rewardMonths;
   const completed = cyclePos === 0 && monthlyStreak > 0 ? rewardMonths : cyclePos;
   const remaining = rewardMonths - completed;
@@ -982,9 +984,13 @@ function menuUpdateCardHtml({ monthlyStreak, rewardMonths }) {
 
   return `
     <div class="stampA-row">${circleParts.join('')}</div>
-    <div class="stampA-labels">${labelParts.join('')}</div>
+    <div class="stampA-labels">${labelParts.join('')}</div>${
+      showMessage
+        ? `
     <p class="stamp-msg ${achieved ? 'celebrate' : ''}">${message}</p>
-    <p style="font-size:0.8rem;color:var(--muted);margin:8px 0 0;">月${MONTHLY_GOAL}回の実施を${rewardMonths}ヶ月連続で達成すると、メニュー更新1回の対象になります。以降も継続すれば${rewardMonths}ヶ月ごとに繰り返し対象になります。</p>`;
+    <p style="font-size:0.8rem;color:var(--muted);margin:8px 0 0;">月${MONTHLY_GOAL}回の実施を${rewardMonths}ヶ月連続で達成すると、メニュー更新1回の対象になります。以降も継続すれば${rewardMonths}ヶ月ごとに繰り返し対象になります。</p>`
+        : ''
+    }`;
 }
 
 function memberPage({
@@ -1348,7 +1354,7 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
         <div class="stat-box"><div class="num">${monthlyStreak}ヶ月</div><div class="label">目標達成 連続月数</div></div>
         <div class="stat-box"><div class="num">${rewardsGiven}/${rewardsEarned}</div><div class="label">特典 渡し済み/獲得済み</div></div>
       </div>
-      ${menuUpdateCardHtml({ monthlyStreak, rewardMonths: REWARD_MONTHS })}
+      ${menuUpdateCardHtml({ monthlyStreak, rewardMonths: REWARD_MONTHS, showMessage: false })}
       <canvas id="monthlyChart" height="110"></canvas>
       ${
         rewardsPending > 0
