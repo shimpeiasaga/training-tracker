@@ -37,10 +37,15 @@ function parseMultipart(req) {
 
             const nameMatch = headerStr.match(/name="([^"]+)"/);
             const filenameMatch = headerStr.match(/filename="([^"]*)"/);
+            const typeMatch = headerStr.match(/Content-Type:\s*([^\r\n]+)/i);
             if (nameMatch) {
               const fieldName = nameMatch[1];
               if (filenameMatch && filenameMatch[1]) {
-                files[fieldName] = { filename: filenameMatch[1], content: body };
+                files[fieldName] = {
+                  filename: filenameMatch[1],
+                  contentType: typeMatch ? typeMatch[1].trim() : '',
+                  content: body,
+                };
               } else {
                 fields[fieldName] = body.toString('utf8');
               }
