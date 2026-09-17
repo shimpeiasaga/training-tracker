@@ -16,7 +16,52 @@ const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
 const MIME = { '.css': 'text/css', '.js': 'application/javascript', '.json': 'application/json', '.png': 'image/png' };
-const STATIC_PATHS = new Set(['/style.css', '/manifest.json', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png']);
+const STATIC_PATHS = new Set(['/style.css', '/manifest.json', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png', '/sw.js']);
+
+// プッシュ通知(ホーム画面に追加した端末への通知)。web-pushが未インストール/未設定でも
+// サーバー全体が落ちないように、読み込み・設定は失敗してもよいものとして扱う
+let webpush = null;
+try {
+  webpush = require('web-push');
+} catch (err) {
+  console.warn('web-pushモジュールが見つからないため、プッシュ通知は無効になります');
+}
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';
+const PUSH_ENABLED = !!(webpush && VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY);
+if (PUSH_ENABLED) {
+  webpush.setVapidDetails(
+    'mailto:' + (process.env.VAPID_CONTACT_EMAIL || 'admin@example.com'),
+    VAPID_PUBLIC_KEY,
+    VAPID_PRIVATE_KEY
+  );
+} else {
+  console.warn('VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEYが未設定のため、プッシュ通知は無効になります');
+}
+
+// 複数の購読(同じ人が複数の端末をホーム画面に追加している場合など)にまとめて送る。
+// 端末側の登録が失効している場合(410/404)は購読情報を自動で削除しておく
+async function sendPushToSubscriptions(subscriptions, payload) {
+  if (!PUSH_ENABLED || !subscriptions || !subscriptions.length) return;
+  const body = JSON.stringify(payload);
+  await Promise.all(
+    subscriptions.map(async (sub) => {
+      try {
+        await webpush.sendNotification({ endpoint: sub.endpoint, keys: sub.keys }, body);
+      } catch (err) {
+        if (err && (err.statusCode === 404 || err.statusCode === 410)) {
+          try {
+            await db.removePushSubscriptionByEndpoint(sub.endpoint);
+          } catch (cleanupErr) {
+            console.error('失効したプッシュ購読の削除に失敗しました:', cleanupErr);
+          }
+        } else {
+          console.error('プッシュ通知の送信に失敗しました:', err);
+        }
+      }
+    })
+  );
+}
 
 // 自動バックアップを1日1回だけ確認するためのプロセス内キャッシュ(毎リクエストDBに問い合わせないようにする)
 let lastBackupCheckDate = null;
@@ -170,6 +215,39 @@ async function handleRequest(req, res) {
     return redirect(res, '/login');
   }
 
+  // --- プッシュ通知の購読登録・解除・公開鍵取得(会員・管理者共通) ---
+  if (pathname === '/push/vapid-public-key' && method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify({ enabled: PUSH_ENABLED, key: PUSH_ENABLED ? VAPID_PUBLIC_KEY : '' }));
+  }
+
+  if (pathname === '/push/subscribe' && method === 'POST') {
+    try {
+      const body = await parseBody(req);
+      const subscription = JSON.parse(body.subscription || '{}');
+      if (subscription && subscription.endpoint && subscription.keys) {
+        await db.addPushSubscription(user.id, user.role, subscription);
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ ok: true }));
+    } catch (err) {
+      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ ok: false }));
+    }
+  }
+
+  if (pathname === '/push/unsubscribe' && method === 'POST') {
+    try {
+      const body = await parseBody(req);
+      if (body.endpoint) await db.removePushSubscriptionByEndpoint(body.endpoint);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ ok: true }));
+    } catch (err) {
+      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ ok: false }));
+    }
+  }
+
   // 1日1回、まだ今日分のバックアップが無ければ自動で取っておく(手動ダウンロードを忘れても大丈夫にするため)。
   // 毎リクエストDBに問い合わせると全体が遅くなるので、プロセス内で「今日は確認済み」を覚えておき、
   // かつレスポンスを待たせないようバックグラウンドで実行する
@@ -294,6 +372,16 @@ async function handleRequest(req, res) {
         body: text,
         createdAt: stats.nowStr(),
       });
+      // 会員からのメッセージは、管理者(全員)に通知する
+      db.getPushSubscriptionsForRole('admin')
+        .then((subs) =>
+          sendPushToSubscriptions(subs, {
+            title: `📩 ${user.name}さんからメッセージ`,
+            body: text,
+            url: `/admin/member/${user.id}#messages`,
+          })
+        )
+        .catch((err) => console.error('プッシュ通知の準備に失敗しました:', err));
     }
     return redirect(res, '/member#messages');
   }
@@ -545,6 +633,17 @@ async function handleRequest(req, res) {
           body: text,
           createdAt: stats.nowStr(),
         });
+        // 管理者からの返信は、その会員に通知する
+        const memberIdForPush = match[1];
+        db.getPushSubscriptionsForUser(memberIdForPush)
+          .then((subs) =>
+            sendPushToSubscriptions(subs, {
+              title: '📩 アドバイザーからメッセージ',
+              body: text,
+              url: '/member#messages',
+            })
+          )
+          .catch((err) => console.error('プッシュ通知の準備に失敗しました:', err));
       }
       return redirect(res, `/admin/member/${match[1]}#messages`);
     }

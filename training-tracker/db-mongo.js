@@ -42,6 +42,9 @@ async function ensureIndexes() {
   // expiresを過ぎたセッションをMongo側が自動で削除してくれる(TTLインデックス)
   await db.collection('sessions').createIndex({ expires: 1 }, { expireAfterSeconds: 0 });
   await db.collection('media').createIndex({ memberId: 1 });
+  await db.collection('pushSubscriptions').createIndex({ endpoint: 1 }, { unique: true });
+  await db.collection('pushSubscriptions').createIndex({ userId: 1 });
+  await db.collection('pushSubscriptions').createIndex({ role: 1 });
   await migrateLegacyVideos(db);
 }
 
@@ -548,6 +551,32 @@ async function deleteMessage(messageId, requesterRole, requesterId) {
   await db.collection('messages').deleteOne({ _id: Number(messageId) });
 }
 
+// --- プッシュ通知の購読情報(ホーム画面に追加したスマホなどに通知を送るため) ---
+// 同じ端末から再登録された場合はendpointで上書きする(重複登録・重複通知を防ぐ)
+async function addPushSubscription(userId, role, subscription) {
+  const db = await getDb();
+  await db.collection('pushSubscriptions').updateOne(
+    { endpoint: subscription.endpoint },
+    { $set: { userId: Number(userId), role, endpoint: subscription.endpoint, keys: subscription.keys, createdAt: nowStr() } },
+    { upsert: true }
+  );
+}
+
+async function removePushSubscriptionByEndpoint(endpoint) {
+  const db = await getDb();
+  await db.collection('pushSubscriptions').deleteOne({ endpoint });
+}
+
+async function getPushSubscriptionsForUser(userId) {
+  const db = await getDb();
+  return db.collection('pushSubscriptions').find({ userId: Number(userId) }).toArray();
+}
+
+async function getPushSubscriptionsForRole(role) {
+  const db = await getDb();
+  return db.collection('pushSubscriptions').find({ role }).toArray();
+}
+
 // --- 会員向け掲示板(会員が投稿、返信できるのは管理者のみ) ---
 function mapPost(doc) {
   if (!doc) return undefined;
@@ -869,6 +898,10 @@ module.exports = {
   getMembersWithUnreadMessages,
   addMessage,
   deleteMessage,
+  addPushSubscription,
+  removePushSubscriptionByEndpoint,
+  getPushSubscriptionsForUser,
+  getPushSubscriptionsForRole,
   getBoardPosts,
   addBoardPost,
   addBoardReply,

@@ -23,6 +23,7 @@ function ensureDataFile() {
           sessions: [],
           media: [],
           library: [],
+          pushSubscriptions: [],
           settings: { rankUpMessages: {} },
           backups: [],
           nextUserId: 1,
@@ -49,6 +50,7 @@ function load() {
   if (!Array.isArray(data.sessions)) data.sessions = [];
   if (!Array.isArray(data.media)) data.media = [];
   if (!Array.isArray(data.library)) data.library = [];
+  if (!Array.isArray(data.pushSubscriptions)) data.pushSubscriptions = [];
   if (!data.settings || typeof data.settings !== 'object') data.settings = {};
   if (!data.settings.rankUpMessages || typeof data.settings.rankUpMessages !== 'object') data.settings.rankUpMessages = {};
   if (!Array.isArray(data.backups)) data.backups = [];
@@ -505,6 +507,39 @@ function deleteMessage(messageId, requesterRole, requesterId) {
   save(data);
 }
 
+// --- プッシュ通知の購読情報(ホーム画面に追加したスマホなどに通知を送るため) ---
+// 同じ端末から再登録された場合はendpointで上書きする(重複登録・重複通知を防ぐ)
+async function addPushSubscription(userId, role, subscription) {
+  const data = load();
+  if (!Array.isArray(data.pushSubscriptions)) data.pushSubscriptions = [];
+  data.pushSubscriptions = data.pushSubscriptions.filter((s) => s.endpoint !== subscription.endpoint);
+  data.pushSubscriptions.push({
+    userId: Number(userId),
+    role,
+    endpoint: subscription.endpoint,
+    keys: subscription.keys,
+    createdAt: nowStr(),
+  });
+  save(data);
+}
+
+async function removePushSubscriptionByEndpoint(endpoint) {
+  const data = load();
+  if (!Array.isArray(data.pushSubscriptions)) return;
+  data.pushSubscriptions = data.pushSubscriptions.filter((s) => s.endpoint !== endpoint);
+  save(data);
+}
+
+async function getPushSubscriptionsForUser(userId) {
+  const data = load();
+  return (data.pushSubscriptions || []).filter((s) => s.userId === Number(userId));
+}
+
+async function getPushSubscriptionsForRole(role) {
+  const data = load();
+  return (data.pushSubscriptions || []).filter((s) => s.role === role);
+}
+
 // --- 会員向け掲示板(会員が投稿、返信できるのは管理者のみ) ---
 function getBoardPosts() {
   return load()
@@ -657,6 +692,10 @@ module.exports = {
   getMembersWithUnreadMessages,
   addMessage,
   deleteMessage,
+  addPushSubscription,
+  removePushSubscriptionByEndpoint,
+  getPushSubscriptionsForUser,
+  getPushSubscriptionsForRole,
   getBoardPosts,
   addBoardPost,
   addBoardReply,

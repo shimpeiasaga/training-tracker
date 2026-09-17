@@ -189,6 +189,11 @@ function libraryListHtml(library, { mode = 'manage', memberId, categories = [] }
                   <button class="btn" type="submit">変更</button>
                 </form>
               </details>
+              ${
+                v.type === 'html'
+                  ? `<a href="data:text/html;charset=utf-8;base64,${Buffer.from(v.htmlContent || '', 'utf8').toString('base64')}" download="${escapeHtml(v.title)}.html" class="btn" style="display:inline-block;margin-bottom:8px;">⬇️ HTMLファイルをダウンロード(他サイトへの移行用)</a>`
+                  : ''
+              }
               ${mediaEmbedHtml(v, 'library')}
             </div>`
             )
@@ -224,6 +229,7 @@ ${script ? `<script>${script}</script>` : ''}
 <script>${BUTTON_LOADING_SCRIPT}</script>
 <script>${SCROLL_RESTORE_SCRIPT}</script>
 <script>${MESSAGE_SCROLL_SCRIPT}</script>
+<script>${PUSH_CLIENT_SCRIPT}</script>
 ${extraScript ? `<script>${extraScript}</script>` : ''}
 </body>
 </html>`;
@@ -231,7 +237,8 @@ ${extraScript ? `<script>${extraScript}</script>` : ''}
 
 // ボタンを押した直後、通信のラグで「押せているか分からない」状態を防ぐため、
 // 送信ボタンを一時的に無効化してテキストを変える(全ページ共通)。
-// メッセージ送信系のボタン(文言が「送信」)だけは「送信中...」、それ以外は「処理中...」にする
+// メッセージ送信系のボタン(文言が「送信」)は「送信中...」、トレーニング完了チェックのボタンは「記録中...」、
+// それ以外は「処理中...」にする
 const BUTTON_LOADING_SCRIPT = `
 document.addEventListener('submit', function (e) {
   // confirm()で「キャンセル」された送信(削除確認など)はここでdefaultPreventedになるので何もしない。
@@ -243,7 +250,12 @@ document.addEventListener('submit', function (e) {
   if (!btn || btn.disabled) return;
   btn.disabled = true;
   btn.dataset.originalText = btn.textContent;
-  btn.textContent = btn.textContent.trim() === '送信' ? '送信中...' : '処理中...';
+  var label = btn.textContent.trim();
+  btn.textContent = label === '送信'
+    ? '送信中...'
+    : btn.classList.contains('checkin-btn')
+    ? '記録中...'
+    : '処理中...';
 });
 
 // フォームの送信ボタン以外(「詳細」などリンクの<a class="btn">、更新ボタン、
@@ -306,6 +318,74 @@ const MESSAGE_SCROLL_SCRIPT = `
   scrollThreadsToBottom();
   requestAnimationFrame(scrollThreadsToBottom);
   window.addEventListener('load', scrollThreadsToBottom);
+})();
+`;
+
+// プッシュ通知(ホーム画面に追加した端末に、メッセージ受信を知らせる)。
+// サービスワーカーの登録と、「🔔 通知を受け取る」ボタンから購読するための処理
+const PUSH_CLIENT_SCRIPT = `
+(function () {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+  navigator.serviceWorker.register('/sw.js').catch(function () {});
+
+  function urlBase64ToUint8Array(base64String) {
+    var padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+    var base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    var rawData = window.atob(base64);
+    var outputArray = new Uint8Array(rawData.length);
+    for (var i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+    return outputArray;
+  }
+
+  window.enablePushNotifications = function (btn) {
+    if (btn) { btn.disabled = true; btn.textContent = '設定中...'; }
+    fetch('/push/vapid-public-key')
+      .then(function (r) { return r.json(); })
+      .then(function (info) {
+        if (!info.enabled) {
+          alert('現在、通知機能は準備中です。');
+          throw new Error('push disabled');
+        }
+        return Notification.requestPermission().then(function (perm) {
+          if (perm !== 'granted') {
+            alert('通知が許可されませんでした。端末(またはブラウザ)の設定から通知を許可してください。');
+            throw new Error('denied');
+          }
+          return navigator.serviceWorker.ready;
+        }).then(function (reg) {
+          return reg.pushManager.getSubscription().then(function (existing) {
+            if (existing) return existing;
+            return reg.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey: urlBase64ToUint8Array(info.key),
+            });
+          });
+        });
+      })
+      .then(function (sub) {
+        return fetch('/push/subscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'subscription=' + encodeURIComponent(JSON.stringify(sub)),
+        });
+      })
+      .then(function () {
+        if (btn) { btn.disabled = false; btn.textContent = '✅ 通知をオンにしました'; }
+        try { localStorage.setItem('pushEnabled', '1'); } catch (err) {}
+      })
+      .catch(function () {
+        if (btn) { btn.disabled = false; btn.textContent = '🔔 通知を受け取る'; }
+      });
+  };
+
+  document.addEventListener('DOMContentLoaded', function () {
+    var btn = document.getElementById('push-enable-btn');
+    if (!btn) return;
+    if (!('Notification' in window)) { btn.style.display = 'none'; return; }
+    var alreadyOn = false;
+    try { alreadyOn = Notification.permission === 'granted' && localStorage.getItem('pushEnabled') === '1'; } catch (err) {}
+    if (alreadyOn) btn.textContent = '✅ 通知をオンにしました';
+  });
 })();
 `;
 
@@ -418,6 +498,9 @@ const PULL_TO_REFRESH_SCRIPT = `
 })();
 `;
 
+// 通知を有効にするボタン(共通)。押すと端末の通知許可ダイアログが出る
+const PUSH_ENABLE_BUTTON = `<button type="button" id="push-enable-btn" class="btn" onclick="window.enablePushNotifications && enablePushNotifications(this)">🔔 通知を受け取る</button>`;
+
 // 管理画面の共通トップバー(更新ボタン付き)。backHrefを指定すると「← ラベル」のリンクになる
 const ADMIN_REFRESH_BTN = `<button type="button" class="btn" onclick="this.disabled=true;this.textContent='更新中...';location.reload();" title="最新の情報に更新します">🔄 更新</button>`;
 function adminTopbar(label, backHref = '') {
@@ -426,6 +509,7 @@ function adminTopbar(label, backHref = '') {
     <div class="topbar-actions">
       <a href="/guide">📖 使い方ガイド</a>
       <a href="/board">💬 みんなの掲示板</a>
+      ${PUSH_ENABLE_BUTTON}
       ${ADMIN_REFRESH_BTN}
       <form method="POST" action="/logout"><button type="submit">ログアウト</button></form>
     </div>
@@ -972,6 +1056,7 @@ function memberPage({
               <button class="btn" type="submit">表示名を保存</button>
             </form>
             <a class="btn" href="/member/password">パスワード変更</a>
+            ${PUSH_ENABLE_BUTTON}
             <form method="POST" action="/logout"><button class="btn" type="submit">ログアウト</button></form>
           </div>
         </details>
