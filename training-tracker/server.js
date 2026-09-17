@@ -359,6 +359,14 @@ async function handleRequest(req, res) {
     );
   }
 
+  // プッシュ通知(service workerからのpostMessage)が届かない端末でも確実にメッセージを
+  // 最新化できるよう、画面側が定期的にこの件数を確認して増えていたら再読み込みする(ポーリング)
+  if (pathname === '/member/messages/count' && method === 'GET') {
+    const msgs = await db.getMessagesForMember(user.id);
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify({ count: msgs.length, lastId: msgs.length ? msgs[msgs.length - 1].id : 0 }));
+  }
+
   if (pathname === '/member/messages' && method === 'POST') {
     const body = await parseBody(req);
     const text = (body.body || '').trim();
@@ -617,6 +625,13 @@ async function handleRequest(req, res) {
     if (match && method === 'POST') {
       await db.incrementRewardsGiven(match[1]);
       return redirect(res, '/admin?message=' + encodeURIComponent('特典を渡した記録を追加しました'));
+    }
+
+    match = pathname.match(/^\/admin\/members\/(\d+)\/messages\/count$/);
+    if (match && method === 'GET') {
+      const msgs = await db.getMessagesForMember(match[1]);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ count: msgs.length, lastId: msgs.length ? msgs[msgs.length - 1].id : 0 }));
     }
 
     match = pathname.match(/^\/admin\/members\/(\d+)\/messages$/);

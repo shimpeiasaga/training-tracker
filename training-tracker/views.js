@@ -231,6 +231,7 @@ ${script ? `<script>${script}</script>` : ''}
 <script>${MESSAGE_SCROLL_SCRIPT}</script>
 <script>${PUSH_CLIENT_SCRIPT}</script>
 <script>${APP_RESUME_REFRESH_SCRIPT}</script>
+<script>${MESSAGE_POLL_SCRIPT}</script>
 ${extraScript ? `<script>${extraScript}</script>` : ''}
 </body>
 </html>`;
@@ -329,6 +330,34 @@ const APP_RESUME_REFRESH_SCRIPT = `
 window.addEventListener('pageshow', function (event) {
   if (event.persisted) location.reload();
 });
+`;
+
+// プッシュ通知(service workerからのpostMessage)は端末やタイミングによって届かないことがあるため、
+// メッセージ画面を開いている間は数秒おきに件数を確認し、増えていたら自動で再読み込みする。
+// これにより、通知が来ない・届かない場合でも取りこぼさず最新のやり取りが表示される
+const MESSAGE_POLL_SCRIPT = `
+(function () {
+  var thread = document.querySelector('.msg-thread[data-poll-url]');
+  if (!thread) return;
+  var pollUrl = thread.getAttribute('data-poll-url');
+  var knownCount = parseInt(thread.getAttribute('data-count'), 10) || 0;
+  function checkForNewMessages() {
+    if (document.visibilityState !== 'visible') return;
+    var active = document.activeElement;
+    var isTyping = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA');
+    if (isTyping) return;
+    fetch(pollUrl, { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) {
+        if (data && data.count !== knownCount) location.reload();
+      })
+      .catch(function () {});
+  }
+  setInterval(checkForNewMessages, 8000);
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible') checkForNewMessages();
+  });
+})();
 `;
 
 // プッシュ通知(ホーム画面に追加した端末に、メッセージ受信を知らせる)。
@@ -814,9 +843,12 @@ function badgeLogHtml(badgeLog) {
 // 管理者⇔会員のメッセージスレッド
 // viewerRole: このページを見ている人の役割('admin'|'member')。自分が送信したメッセージにだけ削除ボタンを出す
 // deleteBasePath: 削除フォームの送信先のベースパス(末尾に "/{メッセージID}/delete" を付けて使う)
-function messageThreadHtml(messages, { viewerRole, deleteBasePath } = {}) {
+// pollUrl を渡すと、その件数を定期的に確認して新着があれば自動で再読み込みする
+// (プッシュ通知のpostMessageが届かない端末でも確実に更新するためのフォールバック)
+function messageThreadHtml(messages, { viewerRole, deleteBasePath, pollUrl } = {}) {
+  const pollAttrs = pollUrl ? ` data-poll-url="${escapeHtml(pollUrl)}" data-count="${messages.length}"` : '';
   if (!messages.length) {
-    return '<p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">まだメッセージはありません</p>';
+    return `<div class="msg-thread"${pollAttrs}></div><p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">まだメッセージはありません</p>`;
   }
   const items = messages
     .map(
@@ -836,7 +868,7 @@ function messageThreadHtml(messages, { viewerRole, deleteBasePath } = {}) {
       </div>`
     )
     .join('');
-  return `<div class="msg-thread">${items}</div>`;
+  return `<div class="msg-thread"${pollAttrs}>${items}</div>`;
 }
 
 function badgeRowHtml(badges) {
@@ -1078,7 +1110,7 @@ function memberPage({
 
     <div class="card" id="messages">
       <h3>📩 アドバイザーとのメッセージ</h3>
-      ${messageThreadHtml(messages, { viewerRole: 'member', deleteBasePath: '/member/messages' })}
+      ${messageThreadHtml(messages, { viewerRole: 'member', deleteBasePath: '/member/messages', pollUrl: '/member/messages/count' })}
       <form method="POST" action="/member/messages" class="inline-form">
         <div class="form-row">
           <label>アドバイザーにメッセージを送る</label>
@@ -1396,7 +1428,7 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
 
     <div class="card" id="messages">
       <h3>📩 ${escapeHtml(member.name)} さんとのメッセージ</h3>
-      ${messageThreadHtml(messages, { viewerRole: 'admin', deleteBasePath: `/admin/members/${member.id}/messages` })}
+      ${messageThreadHtml(messages, { viewerRole: 'admin', deleteBasePath: `/admin/members/${member.id}/messages`, pollUrl: `/admin/members/${member.id}/messages/count` })}
       <form method="POST" action="/admin/members/${member.id}/messages" class="inline-form">
         <div class="form-row">
           <label>メッセージを送る</label>
