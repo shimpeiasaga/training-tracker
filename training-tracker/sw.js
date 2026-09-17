@@ -39,7 +39,7 @@ self.addEventListener('push', function (event) {
           client.postMessage({ type: 'push-refresh' });
         });
       }),
-      self.navigator && self.navigator.setAppBadge ? self.navigator.setAppBadge().catch(function () {}) : Promise.resolve(),
+      self.navigator && self.navigator.setAppBadge ? self.navigator.setAppBadge(1).catch(function () {}) : Promise.resolve(),
     ])
   );
 });
