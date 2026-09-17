@@ -328,6 +328,16 @@ const PUSH_CLIENT_SCRIPT = `
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   navigator.serviceWorker.register('/sw.js').catch(function () {});
 
+  // 通知が届いたら、開いている画面も一緒に最新の内容へ更新する。
+  // ただし入力中(メッセージ入力欄などにフォーカスがある)は、書きかけの内容が消えないよう更新を見送る
+  navigator.serviceWorker.addEventListener('message', function (event) {
+    if (!event.data || event.data.type !== 'push-refresh') return;
+    var active = document.activeElement;
+    var isTyping = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA');
+    if (isTyping) return;
+    location.reload();
+  });
+
   function urlBase64ToUint8Array(base64String) {
     var padding = '='.repeat((4 - (base64String.length % 4)) % 4);
     var base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
@@ -992,7 +1002,8 @@ function memberPage({
     title: 'マイページ | オンライン運動元気倶楽部',
     topbar: topbar(`${escapeHtml(userName)} さん`, false, true),
     script,
-    extraScript: PULL_TO_REFRESH_SCRIPT + appBadgeScript(hasUnreadMessages ? 1 : 0),
+    // このページを開いた時点で未読メッセージは既読になっているので、バッジは必ず消す
+    extraScript: PULL_TO_REFRESH_SCRIPT + appBadgeScript(0),
     body: `
     ${unreadBanner}
     ${celebrateBanner}

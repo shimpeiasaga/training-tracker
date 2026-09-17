@@ -13,7 +13,18 @@ self.addEventListener('push', function (event) {
     badge: '/icon-192.png',
     data: { url: data.url || '/' },
   };
-  event.waitUntil(self.registration.showNotification(title, options));
+  // 通知を出すのと同時に、既に開いているタブがあれば中身を最新に更新しておく
+  // (通知を確認しても、アプリの画面が古いままだと新着メッセージが見えないため)
+  event.waitUntil(
+    Promise.all([
+      self.registration.showNotification(title, options),
+      clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (clientList) {
+        clientList.forEach(function (client) {
+          client.postMessage({ type: 'push-refresh' });
+        });
+      }),
+    ])
+  );
 });
 
 // 通知をタップしたら、既に開いているタブがあればそれを使い、無ければ新しく開く
