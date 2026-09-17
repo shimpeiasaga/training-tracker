@@ -379,12 +379,14 @@ async function handleRequest(req, res) {
         createdAt: stats.nowStr(),
       });
       // 会員からのメッセージは、管理者(全員)に通知する
-      db.getPushSubscriptionsForRole('admin')
-        .then((subs) =>
+      // badgeCount: アイコンの赤丸に表示する数(未読のある会員の人数。管理画面の表示件数と揃える)
+      Promise.all([db.getPushSubscriptionsForRole('admin'), db.getMembersWithUnreadMessages()])
+        .then(([subs, unreadMembers]) =>
           sendPushToSubscriptions(subs, {
             title: `📩 ${user.name}さんからメッセージ`,
             body: text,
             url: `/admin/member/${user.id}#messages`,
+            badgeCount: unreadMembers.length,
           })
         )
         .catch((err) => console.error('プッシュ通知の準備に失敗しました:', err));
@@ -647,12 +649,14 @@ async function handleRequest(req, res) {
           createdAt: stats.nowStr(),
         });
         // 管理者からの返信は、その会員に通知する
+        // badgeCount: 会員側は「未読あり/なし」のみの概念なので1で立てる(会員ページを開くと0に戻る)
         const memberIdForPush = match[1];
         db.getPushSubscriptionsForUser(memberIdForPush)
           .then((subs) =>
             sendPushToSubscriptions(subs, {
               title: '📩 アドバイザーからメッセージ',
               body: text,
+              badgeCount: 1,
               url: '/member#messages',
             })
           )
