@@ -1,4 +1,15 @@
 // プッシュ通知用のサービスワーカー(ホーム画面に追加したアプリに通知を届けるために必要)
+
+// このファイルを更新した時、既に開いているタブが古いservice workerのまま動き続けて
+// 新しい処理(通知と同時に画面を更新する機能など)が反映されない問題を防ぐため、
+// 新しいバージョンが見つかったらすぐに有効化して、開いている画面もすぐ管理下に置く
+self.addEventListener('install', function (event) {
+  self.skipWaiting();
+});
+self.addEventListener('activate', function (event) {
+  event.waitUntil(self.clients.claim());
+});
+
 self.addEventListener('push', function (event) {
   var data = {};
   try {

@@ -147,10 +147,11 @@ function serveStatic(req, res, pathname) {
       return res.end('Not found');
     }
     const ext = path.extname(filePath);
-    // CSS・アイコンなどは内容が変わらない限りブラウザにキャッシュさせ、毎回の再ダウンロードを避ける
+    // CSS・アイコンなどは内容が変わらない限りブラウザにキャッシュさせ、毎回の再ダウンロードを避ける。
+    // ただしsw.js(サービスワーカー)はキャッシュさせると更新内容がなかなか反映されないため、常に最新を取りに行かせる
     res.writeHead(200, {
       'Content-Type': MIME[ext] || 'application/octet-stream',
-      'Cache-Control': 'public, max-age=3600',
+      'Cache-Control': pathname === '/sw.js' ? 'no-cache' : 'public, max-age=3600',
     });
     res.end(data);
   });
