@@ -26,17 +26,14 @@ try {
 } catch (err) {
   console.warn('web-pushモジュールが見つからないため、プッシュ通知は無効になります');
 }
-const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
-const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';
+// このアプリ専用に発行した鍵(Renderの環境変数を増やさずに済むよう、直接コードに書いている)
+const VAPID_PUBLIC_KEY = 'BCoY8NRiYz9aDDaieVrcBq1viOncq7aJvMqs7ec7xH64e8vqVDEB-d9tUrTK7obRvooGB2I6j0YpyXx7NxnsPWg';
+const VAPID_PRIVATE_KEY = 'LSUfKN5rkJkSnmLeQDjTrGaIpdUAKFrMyJktN-pyfnI';
 const PUSH_ENABLED = !!(webpush && VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY);
 if (PUSH_ENABLED) {
-  webpush.setVapidDetails(
-    'mailto:' + (process.env.VAPID_CONTACT_EMAIL || 'admin@example.com'),
-    VAPID_PUBLIC_KEY,
-    VAPID_PRIVATE_KEY
-  );
+  webpush.setVapidDetails('mailto:admin@example.com', VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 } else {
-  console.warn('VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEYが未設定のため、プッシュ通知は無効になります');
+  console.warn('VAPID鍵が未設定のため、プッシュ通知は無効になります');
 }
 
 // 複数の購読(同じ人が複数の端末をホーム画面に追加している場合など)にまとめて送る。

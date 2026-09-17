@@ -542,6 +542,17 @@ function topbar(label, showLogout = true, showSiteTitle = false, settingsMenu = 
   </div>`;
 }
 
+// アプリのアイコンに未読件数の赤丸(バッジ)を出す/消す。Badging APIに対応した端末でのみ動く
+// (Android・パソコンのChromeなどは対応、iPhoneのホーム画面アプリは対応が不安定)
+function appBadgeScript(count) {
+  return `
+(function () {
+  if (!navigator.setAppBadge) return;
+  ${count > 0 ? `navigator.setAppBadge(${Number(count)}).catch(function () {});` : `navigator.clearAppBadge && navigator.clearAppBadge().catch(function () {});`}
+})();
+`;
+}
+
 // ガイド内の1項目(見出し+説明文)
 function guideItem(title, body) {
   return `<div class="guide-item"><h4>${title}</h4><p>${body}</p></div>`;
@@ -558,6 +569,7 @@ function guidePage(userRole) {
     guideItem('📩 メッセージ', 'アドバイザーに直接メッセージを送れます。やり取りは常に一番新しいものが見える状態で開きます。過去のものは枠内を上にスクロールすると読めます。'),
     guideItem('🏆 ランキング', '今月の実施回数の順位(上位3名)を確認できます。'),
     guideItem('⚙️ 設定', '「設定」を開くと、会員ページに表示する名前(表示名)やログインパスワードを自分で変更できます。'),
+    guideItem('🔔 通知を受け取る', '「設定」の中にある「🔔 通知を受け取る」を押すと、アドバイザーからメッセージが届いた時にスマホへ通知が来るようになります。iPhoneの場合は、先に「ホーム画面に追加」した上で、そのアイコンから開いた状態でボタンを押してください(使い方は下の「ホーム画面に追加する方法」を参照)。'),
     guideItem('💬 みんなの掲示板', '会員同士が自由に投稿・交流できる場所です。返信ができるのはアドバイザー(管理者)のみです。'),
   ].join('');
 
@@ -573,6 +585,7 @@ function guidePage(userRole) {
         guideItem('📩 メッセージ対応', '会員から届いたメッセージに返信できます。新着があるとダッシュボード上部に通知が表示されます。'),
         guideItem('💾 バックアップ', '1日1回自動でバックアップが保存され、直近14日分をいつでもダウンロードできます。手動ですぐに保存したい時は「今すぐダウンロード」を押してください。'),
         guideItem('🔄 更新ボタン', '画面右上の「🔄 更新」を押すと、最新の状態に読み込み直せます。'),
+        guideItem('🔔 通知を受け取る', '画面右上の「🔔 通知を受け取る」を押すと、会員からメッセージが届いた時にスマホへ通知が来るようになります。iPhoneの場合は、先に「ホーム画面に追加」した上で、そのアイコンから開いた状態でボタンを押してください(使い方は下の「ホーム画面に追加する方法」を参照)。'),
       ].join('')
     : '';
 
@@ -969,7 +982,7 @@ function memberPage({
     title: 'マイページ | オンライン運動元気倶楽部',
     topbar: topbar(`${escapeHtml(userName)} さん`, false, true),
     script,
-    extraScript: PULL_TO_REFRESH_SCRIPT,
+    extraScript: PULL_TO_REFRESH_SCRIPT + appBadgeScript(hasUnreadMessages ? 1 : 0),
     body: `
     ${unreadBanner}
     ${celebrateBanner}
@@ -1121,6 +1134,7 @@ function adminPage({ members, ranked, error, message, unreadMembers = [], rankUp
   return layout({
     title: '管理者ダッシュボード | オンライン運動元気倶楽部',
     topbar: adminTopbar('管理者ダッシュボード'),
+    extraScript: appBadgeScript(unreadMembers.length),
     body: `
     ${
       unreadMembers.length
