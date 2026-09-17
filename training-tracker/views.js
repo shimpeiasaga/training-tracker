@@ -230,6 +230,7 @@ ${script ? `<script>${script}</script>` : ''}
 <script>${SCROLL_RESTORE_SCRIPT}</script>
 <script>${MESSAGE_SCROLL_SCRIPT}</script>
 <script>${PUSH_CLIENT_SCRIPT}</script>
+<script>${APP_RESUME_REFRESH_SCRIPT}</script>
 ${extraScript ? `<script>${extraScript}</script>` : ''}
 </body>
 </html>`;
@@ -319,6 +320,15 @@ const MESSAGE_SCROLL_SCRIPT = `
   requestAnimationFrame(scrollThreadsToBottom);
   window.addEventListener('load', scrollThreadsToBottom);
 })();
+`;
+
+// ホーム画面のアイコンからアプリを開いた時、スマホ側が「前回見た時のままの画面」を
+// メモリから復元してしまい(bfcache)、サーバーへ問い合わせ直さないことがある。
+// その場合に古い内容のまま表示され続けるのを防ぐため、復元されたことを検知したら読み込み直す
+const APP_RESUME_REFRESH_SCRIPT = `
+window.addEventListener('pageshow', function (event) {
+  if (event.persisted) location.reload();
+});
 `;
 
 // プッシュ通知(ホーム画面に追加した端末に、メッセージ受信を知らせる)。
@@ -476,6 +486,12 @@ const PULL_TO_REFRESH_SCRIPT = `
       startY = e.touches[0].clientY;
       pulling = true;
       currentPull = 0;
+    } else {
+      // ページの途中からのタッチでは引っ張り更新を始めない。
+      // 前回のジェスチャーがtouchend/touchcancelを取りこぼして「引っ張り中」のまま
+      // 残ってしまうケースがあるため、ここで必ずリセットしておく
+      pulling = false;
+      resetIndicator();
     }
   }, { passive: true });
   document.addEventListener('touchmove', function (e) {
