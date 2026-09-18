@@ -1120,7 +1120,7 @@ function memberPage({
       <form method="POST" action="/member/messages" class="inline-form">
         <div class="form-row">
           <label>アドバイザーにメッセージを送る</label>
-          <input type="text" name="body" maxlength="500" required>
+          <textarea name="body" maxlength="500" rows="2" required></textarea>
         </div>
         <button class="btn primary" type="submit">送信</button>
       </form>
@@ -1439,7 +1439,7 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
       <form method="POST" action="/admin/members/${member.id}/messages" class="inline-form">
         <div class="form-row">
           <label>メッセージを送る</label>
-          <input type="text" name="body" maxlength="500" required>
+          <textarea name="body" maxlength="500" rows="2" required></textarea>
         </div>
         <button class="btn primary" type="submit">送信</button>
       </form>
