@@ -1175,11 +1175,17 @@ function memberPasswordPage({ userName, error, message }) {
 }
 
 function adminPage({ members, ranked, error, message, unreadMembers = [], rankUpMessages = {}, backups = [] }) {
+  // 会員一覧の名前の横にも、新着メッセージがある会員には📩マークを出す(上のバナーだけだと見落としやすいため)
+  const unreadMemberIds = new Set(unreadMembers.map((m) => m.id));
   const rows = members
     .map(
       (m) => `
     <tr>
-      <td>${m.badgeIcon ? `<span title="${escapeHtml(m.badgeLabel)}">${m.badgeIcon}</span> ` : ''}<a href="/admin/member/${m.id}">${escapeHtml(m.name)}</a></td>
+      <td>${m.badgeIcon ? `<span title="${escapeHtml(m.badgeLabel)}">${m.badgeIcon}</span> ` : ''}<a href="/admin/member/${m.id}">${escapeHtml(m.name)}</a>${
+        unreadMemberIds.has(m.id)
+          ? ` <a href="/admin/member/${m.id}#messages" title="新着メッセージがあります" style="text-decoration:none;">📩</a>`
+          : ''
+      }</td>
       <td><span class="badge ${m.weekCount >= 3 ? 'good' : 'warn'}">${m.weekCount}/7</span></td>
       <td><span class="badge ${m.monthCount >= m.monthGoal ? 'good' : 'warn'}">${m.monthCount}/${m.monthGoal}</span></td>
       <td>${m.monthlyStreak}ヶ月</td>
