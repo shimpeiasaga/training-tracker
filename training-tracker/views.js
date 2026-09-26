@@ -491,6 +491,7 @@ const MEDIA_REORDER_SCRIPT = `
 
 // data-multi-confirm="3" を付けたボタンを、指定回数連続で押さないと実際には送信されないようにする
 // (誤操作で1回押しただけでは何も起きない。押すたびに文言が変わって残り回数が分かる)
+// 最後の1回では、押した上でさらに確認ダイアログも出す(二重の誤操作防止)
 const MULTI_CONFIRM_SCRIPT = `
 (function () {
   document.addEventListener('click', function (e) {
@@ -498,11 +499,17 @@ const MULTI_CONFIRM_SCRIPT = `
     if (!btn) return;
     var required = parseInt(btn.getAttribute('data-multi-confirm'), 10) || 1;
     var clicks = parseInt(btn.dataset.clicks || '0', 10) + 1;
-    if (clicks >= required) return;
-    e.preventDefault();
-    btn.dataset.clicks = clicks;
-    if (!btn.dataset.originalText) btn.dataset.originalText = btn.textContent;
-    btn.textContent = 'あと' + (required - clicks) + '回押すと削除します';
+    if (clicks < required) {
+      e.preventDefault();
+      btn.dataset.clicks = clicks;
+      if (!btn.dataset.originalText) btn.dataset.originalText = btn.textContent;
+      btn.textContent = 'あと' + (required - clicks) + '回押すと削除します';
+      return;
+    }
+    var confirmMessage = btn.getAttribute('data-multi-confirm-message') || '本当に削除しますか?この操作は元に戻せません。';
+    if (!confirm(confirmMessage)) {
+      e.preventDefault();
+    }
   });
 })();
 `;
@@ -1483,10 +1490,10 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
     <div class="card" style="border-color:var(--danger);">
       <h3 style="color:var(--danger);">⚠️ 会員を削除</h3>
       <p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">
-        削除すると、この会員の記録・メッセージ・専用トレーニングもすべて消え、元に戻せません。会員一覧の画面からは押せないよう、この詳細ページの中だけに移しています。ボタンは3回連続で押すと削除されます(誤操作防止)。
+        削除すると、この会員の記録・メッセージ・専用トレーニングもすべて消え、元に戻せません。会員一覧の画面からは押せないよう、この詳細ページの中だけに移しています。ボタンを3回連続で押すと、最後に確認画面が出て削除されます(誤操作防止)。
       </p>
       <form method="POST" action="/admin/members/${member.id}/delete">
-        <button class="btn danger" type="submit" data-multi-confirm="3">${escapeHtml(member.name)}さんを削除する</button>
+        <button class="btn danger" type="submit" data-multi-confirm="3" data-multi-confirm-message="${escapeHtml(member.name)}さんを削除しますか?この操作は元に戻せません。">${escapeHtml(member.name)}さんを削除する</button>
       </form>
     </div>`,
   });
