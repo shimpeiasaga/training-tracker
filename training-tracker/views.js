@@ -489,6 +489,24 @@ const MEDIA_REORDER_SCRIPT = `
 })();
 `;
 
+// data-multi-confirm="3" を付けたボタンを、指定回数連続で押さないと実際には送信されないようにする
+// (誤操作で1回押しただけでは何も起きない。押すたびに文言が変わって残り回数が分かる)
+const MULTI_CONFIRM_SCRIPT = `
+(function () {
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('button[data-multi-confirm]');
+    if (!btn) return;
+    var required = parseInt(btn.getAttribute('data-multi-confirm'), 10) || 1;
+    var clicks = parseInt(btn.dataset.clicks || '0', 10) + 1;
+    if (clicks >= required) return;
+    e.preventDefault();
+    btn.dataset.clicks = clicks;
+    if (!btn.dataset.originalText) btn.dataset.originalText = btn.textContent;
+    btn.textContent = 'あと' + (required - clicks) + '回押すと削除します';
+  });
+})();
+`;
+
 // 会員TOPページ専用: 下に引っ張って更新するジェスチャー(プルアンドフレッシュ)
 // 「引っ張り中」かどうかはtouchstartの時点(スクロール位置が一番上)だけで判定する。
 // 途中のtouchmoveのたびにwindow.scrollYを再チェックしていると、インジケーターの高さが
@@ -1325,7 +1343,7 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
     title: `${escapeHtml(member.name)} の詳細 | オンライン運動元気倶楽部`,
     topbar: adminTopbar('管理者ダッシュボード', '/admin'),
     script,
-    extraScript: MEDIA_REORDER_SCRIPT,
+    extraScript: MEDIA_REORDER_SCRIPT + MULTI_CONFIRM_SCRIPT,
     body: `
     ${hadUnreadMessages ? `<a href="#messages" class="notice-banner">📩 ${escapeHtml(member.name)}さんから新着メッセージがあります</a>` : ''}
     <div class="card">
@@ -1465,10 +1483,10 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
     <div class="card" style="border-color:var(--danger);">
       <h3 style="color:var(--danger);">⚠️ 会員を削除</h3>
       <p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">
-        削除すると、この会員の記録・メッセージ・専用トレーニングもすべて消え、元に戻せません。会員一覧の画面からは押せないよう、この詳細ページの中だけに移しています。
+        削除すると、この会員の記録・メッセージ・専用トレーニングもすべて消え、元に戻せません。会員一覧の画面からは押せないよう、この詳細ページの中だけに移しています。ボタンは3回連続で押すと削除されます(誤操作防止)。
       </p>
-      <form method="POST" action="/admin/members/${member.id}/delete" onsubmit="return confirm('${escapeHtml(member.name)}さんを削除しますか?この操作は元に戻せません。');">
-        <button class="btn danger" type="submit">${escapeHtml(member.name)}さんを削除する</button>
+      <form method="POST" action="/admin/members/${member.id}/delete">
+        <button class="btn danger" type="submit" data-multi-confirm="3">${escapeHtml(member.name)}さんを削除する</button>
       </form>
     </div>`,
   });
