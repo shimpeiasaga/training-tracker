@@ -883,16 +883,21 @@ function badgeRowHtml(badges) {
     .join('')}</div>`;
 }
 
-function leaderboardHtml(ranked, currentUserId, limit = 3) {
+// linkToAdmin: 管理画面から呼ぶ時にtrueにすると、名前を押して会員の詳細ページに飛べるようにする
+function leaderboardHtml(ranked, currentUserId, limit = 3, linkToAdmin = false) {
   const top = ranked.slice(0, limit);
   const meInTop = top.some((r) => r.id === currentUserId);
   const me = ranked.find((r) => r.id === currentUserId);
+  const nameHtml = (r, extra = '') =>
+    linkToAdmin
+      ? `<a href="/admin/member/${r.id}" style="color:inherit;text-decoration:none;">${escapeHtml(r.name)}${extra}</a>`
+      : `${escapeHtml(r.name)}${extra}`;
   const rows = top
     .map(
       (r) => `
       <li class="rank-${r.rank} ${r.id === currentUserId ? 'me' : ''}">
         <span class="rank">${r.rank}</span>
-        <span class="name">${escapeHtml(r.name)}${r.id === currentUserId ? ' (あなた)' : ''}</span>
+        <span class="name">${nameHtml(r, r.id === currentUserId ? ' (あなた)' : '')}</span>
         <span class="count">${r.count}回</span>
       </li>`
     )
@@ -901,7 +906,7 @@ function leaderboardHtml(ranked, currentUserId, limit = 3) {
     !meInTop && me
       ? `<li class="me" style="border-top:2px dashed var(--border);margin-top:4px;">
           <span class="rank">${me.rank}</span>
-          <span class="name">${escapeHtml(me.name)} (あなた)</span>
+          <span class="name">${nameHtml(me, ' (あなた)')}</span>
           <span class="count">${me.count}回</span>
         </li>`
       : '';
@@ -1202,11 +1207,6 @@ function adminPage({ members, ranked, error, message, unreadMembers = [], rankUp
         }
       </td>
       <td><a class="btn" href="/admin/member/${m.id}">詳細</a></td>
-      <td>
-        <form method="POST" action="/admin/members/${m.id}/delete" onsubmit="return confirm('${escapeHtml(m.name)}さんを削除しますか?');">
-          <button class="btn danger" type="submit">削除</button>
-        </form>
-      </td>
     </tr>`
     )
     .join('');
@@ -1238,16 +1238,16 @@ function adminPage({ members, ranked, error, message, unreadMembers = [], rankUp
 
     <div class="card">
       <h3>🏆 今月のランキング</h3>
-      ${ranked.length ? leaderboardHtml(ranked, null, ranked.length) : '<p style="font-size:0.85rem;color:var(--muted);margin:0;">まだデータがありません</p>'}
+      ${ranked.length ? leaderboardHtml(ranked, null, ranked.length, true) : '<p style="font-size:0.85rem;color:var(--muted);margin:0;">まだデータがありません</p>'}
     </div>
 
     <div class="card">
       <h2>会員の進捗</h2>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>名前</th><th>今週</th><th>今月</th><th>目標達成月数</th><th>連続日数</th><th>累計</th><th>最終実施日</th><th>特典</th><th></th><th></th></tr></thead>
+          <thead><tr><th>名前</th><th>今週</th><th>今月</th><th>目標達成月数</th><th>連続日数</th><th>累計</th><th>最終実施日</th><th>特典</th><th></th></tr></thead>
           <tbody>
-            ${rows || `<tr><td colspan="10">まだ会員が登録されていません</td></tr>`}
+            ${rows || `<tr><td colspan="9">まだ会員が登録されていません</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -1459,6 +1459,16 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
           <input type="password" name="newPassword" minlength="4" required>
         </div>
         <button class="btn" type="submit">再設定</button>
+      </form>
+    </div>
+
+    <div class="card" style="border-color:var(--danger);">
+      <h3 style="color:var(--danger);">⚠️ 会員を削除</h3>
+      <p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">
+        削除すると、この会員の記録・メッセージ・専用トレーニングもすべて消え、元に戻せません。会員一覧の画面からは押せないよう、この詳細ページの中だけに移しています。
+      </p>
+      <form method="POST" action="/admin/members/${member.id}/delete" onsubmit="return confirm('${escapeHtml(member.name)}さんを削除しますか?この操作は元に戻せません。');">
+        <button class="btn danger" type="submit">${escapeHtml(member.name)}さんを削除する</button>
       </form>
     </div>`,
   });
