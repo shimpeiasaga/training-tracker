@@ -1053,6 +1053,7 @@ function memberPage({
   messages,
   media,
   hasUnreadMessages,
+  hasPushSubscription = false,
   rankUpMessages = {},
 }) {
   const script = `
@@ -1082,6 +1083,16 @@ function memberPage({
     ? `<a href="#messages" class="notice-banner">📩 アドバイザーから新着メッセージがあります</a>`
     : '';
 
+  // まだ通知(プッシュ通知)をONにしていない会員には、目立つ場所で案内する
+  // (使い方ガイドの奥にボタンがあるだけだと気づかれにくいため)
+  const pushPromptBanner = !hasPushSubscription
+    ? `<div class="card" style="background:#eaf2fd;border-color:var(--primary-light);">
+        <h3 style="margin:0 0 6px;">🔔 通知をONにしませんか？</h3>
+        <p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">アドバイザーからメッセージが届いた時に、スマホへすぐお知らせが届くようになります。iPhoneの場合は、先に「ホーム画面に追加」してから下のボタンを押してください。</p>
+        ${PUSH_ENABLE_BUTTON}
+      </div>`
+    : '';
+
   return layout({
     title: 'マイページ | オンライン運動元気倶楽部',
     topbar: topbar(`${escapeHtml(userName)} さん`, false, true),
@@ -1091,6 +1102,7 @@ function memberPage({
     body: `
     ${unreadBanner}
     ${celebrateBanner}
+    ${pushPromptBanner}
 
     <div class="card" id="video">
       <h3>${escapeHtml(userName)}さんの専用トレーニング</h3>
@@ -1204,9 +1216,10 @@ function memberPasswordPage({ userName, error, message }) {
   });
 }
 
-function adminPage({ members, ranked, error, message, unreadMembers = [], rankUpMessages = {}, backups = [] }) {
+function adminPage({ members, ranked, error, message, unreadMembers = [], rankUpMessages = {}, backups = [], pushEnabledMemberIds = new Set() }) {
   // 会員一覧の名前の横にも、新着メッセージがある会員には📩マークを出す(上のバナーだけだと見落としやすいため)
   const unreadMemberIds = new Set(unreadMembers.map((m) => m.id));
+  const membersWithoutPush = members.filter((m) => !pushEnabledMemberIds.has(m.id));
   const rows = members
     .map(
       (m) => `
@@ -1222,6 +1235,13 @@ function adminPage({ members, ranked, error, message, unreadMembers = [], rankUp
       <td>${m.streak}日</td>
       <td>${m.total}回</td>
       <td>${m.lastDate || '未実施'}</td>
+      <td>
+        ${
+          pushEnabledMemberIds.has(m.id)
+            ? '<span class="badge good">🔔 ON</span>'
+            : '<span class="badge warn">🔕 未設定</span>'
+        }
+      </td>
       <td>
         ${
           m.rewardsPending > 0
@@ -1266,13 +1286,25 @@ function adminPage({ members, ranked, error, message, unreadMembers = [], rankUp
       ${ranked.length ? leaderboardHtml(ranked, null, ranked.length, true) : '<p style="font-size:0.85rem;color:var(--muted);margin:0;">まだデータがありません</p>'}
     </div>
 
+    ${
+      membersWithoutPush.length
+        ? `<div class="card">
+            <h3>🔕 通知が未設定の会員</h3>
+            <p style="font-size:0.85rem;color:var(--muted);margin:0 0 10px;">下の会員はまだ通知(プッシュ通知)をONにしていません。通知はご本人のスマホでしか設定できないため、会った時や連絡のついでに「使い方ガイドの🔔ボタン」を押すよう案内してあげてください。</p>
+            <p style="margin:0;">${membersWithoutPush
+              .map((m) => `<a href="/admin/member/${m.id}" style="display:inline-block;margin:0 10px 6px 0;">${escapeHtml(m.name)}さん</a>`)
+              .join('')}</p>
+          </div>`
+        : ''
+    }
+
     <div class="card">
       <h2>会員の進捗</h2>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>名前</th><th>今週</th><th>今月</th><th>目標達成月数</th><th>連続日数</th><th>累計</th><th>最終実施日</th><th>特典</th><th></th></tr></thead>
+          <thead><tr><th>名前</th><th>今週</th><th>今月</th><th>目標達成月数</th><th>連続日数</th><th>累計</th><th>最終実施日</th><th>通知</th><th>特典</th><th></th></tr></thead>
           <tbody>
-            ${rows || `<tr><td colspan="9">まだ会員が登録されていません</td></tr>`}
+            ${rows || `<tr><td colspan="10">まだ会員が登録されていません</td></tr>`}
           </tbody>
         </table>
       </div>

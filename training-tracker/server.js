@@ -303,7 +303,7 @@ async function handleRequest(req, res) {
   // --- 会員ページ ---
   if (pathname === '/member' && method === 'GET') {
     // 互いに関係ない読み込みはまとめて並行実行する(1つずつ順番に待つと遅くなるため)
-    const [memberUser, settings, checkinRecords, hasUnreadMessages, memberMessages, ranked, media] = await Promise.all([
+    const [memberUser, settings, checkinRecords, hasUnreadMessages, memberMessages, ranked, media, pushSubs] = await Promise.all([
       db.getUserById(user.id),
       db.getSettings(),
       db.getCheckinsForUser(user.id),
@@ -311,7 +311,9 @@ async function handleRequest(req, res) {
       db.getMessagesForMember(user.id),
       computeMonthlyRanking(true, true),
       db.getMediaForMember(user.id),
+      db.getPushSubscriptionsForUser(user.id),
     ]);
+    const hasPushSubscription = pushSubs.length > 0;
     const checkins = checkinRecords.map((c) => c.date);
     const today = stats.todayStr();
     const streak = stats.currentStreak(checkins);
@@ -326,6 +328,7 @@ async function handleRequest(req, res) {
       200,
       views.memberPage({
         hasUnreadMessages,
+        hasPushSubscription,
         userName: (memberUser && memberUser.displayName) || user.name,
         rankUpMessages: settings.rankUpMessages,
         today,
@@ -534,12 +537,15 @@ async function handleRequest(req, res) {
 
     if (pathname === '/admin' && method === 'GET') {
       // 会員+チェックイン履歴は1回だけ取得して、進捗表とランキングの両方で使い回す(重複取得しない)
-      const [membersWithCheckins, unreadMembers, settings, backups] = await Promise.all([
+      const [membersWithCheckins, unreadMembers, settings, backups, memberPushSubs] = await Promise.all([
         getMembersWithCheckins(),
         db.getMembersWithUnreadMessages(),
         db.getSettings(),
         db.listBackups(),
+        db.getPushSubscriptionsForRole('member'),
       ]);
+      // 通知をONにしている(=プッシュ購読が1件以上ある)会員のID一覧。声かけの目安として管理画面に表示する
+      const pushEnabledMemberIds = new Set(memberPushSubs.map((s) => Number(s.userId)));
       const members = membersWithCheckins.map((m) => {
         const checkins = m.checkins;
         const streak = stats.currentStreak(checkins);
@@ -577,6 +583,7 @@ async function handleRequest(req, res) {
           message: url.searchParams.get('message'),
           rankUpMessages: settings.rankUpMessages,
           backups,
+          pushEnabledMemberIds,
         })
       );
     }
