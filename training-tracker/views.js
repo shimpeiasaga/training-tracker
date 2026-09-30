@@ -11,6 +11,10 @@ function escapeHtml(str) {
     .replace(/'/g, '&#39;');
 }
 
+// セット数・回数の入力欄でEnterキーを押してもフォームを送信しない(追加・保存ボタンを押した時だけ送信する)。
+// 日本語入力の変換確定のEnterはそのまま通す
+const NO_ENTER_SUBMIT = `onkeydown="if(event.key===&#39;Enter&#39;&amp;&amp;!event.isComposing){event.preventDefault();}"`;
+
 // YouTubeのURL(watch/短縮/shorts/埋め込み)から埋め込み用URLを作る。YouTube以外はnull
 function youtubeEmbedUrl(url) {
   if (!url) return null;
@@ -85,7 +89,7 @@ function mediaListHtml(media, { deletable = false, memberId } = {}) {
                 <summary>${v.note ? 'セット数・回数を編集' : 'セット数・回数を追加'}</summary>
                 <form method="POST" action="/admin/members/${memberId}/media/${v.id}/note" class="inline-form">
                   <div class="form-row">
-                    <input type="text" name="note" maxlength="200" value="${escapeHtml(v.note || '')}" placeholder="例: 3セット×10回">
+                    <input type="text" name="note" maxlength="200" ${NO_ENTER_SUBMIT} value="${escapeHtml(v.note || '')}" placeholder="例: 3セット×10回">
                   </div>
                   <button class="btn" type="submit">保存</button>
                 </form>
@@ -152,7 +156,7 @@ function libraryListHtml(library, { mode = 'manage', memberId, categories = [] }
                 </summary>
                 <div class="lib-pick-preview">${mediaEmbedHtml(v, 'library')}</div>
                 <form method="POST" action="/admin/members/${memberId}/media/from-library/${v.id}" class="lib-pick-form">
-                  <input type="text" name="note" maxlength="200" placeholder="セット数・回数(任意)">
+                  <input type="text" name="note" maxlength="200" ${NO_ENTER_SUBMIT} placeholder="セット数・回数(任意)">
                   <button class="btn primary" type="submit">追加</button>
                 </form>
               </details>`
@@ -1458,7 +1462,7 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
               </div>
               <div class="form-row">
                 <label>セット数・回数(任意)</label>
-                <input type="text" name="note" maxlength="200" placeholder="例: 3セット×10回">
+                <input type="text" name="note" maxlength="200" ${NO_ENTER_SUBMIT} placeholder="例: 3セット×10回">
               </div>
               <button class="btn primary" type="submit">動画を追加</button>
             </form>
@@ -1473,7 +1477,7 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
               </div>
               <div class="form-row">
                 <label>セット数・回数(任意)</label>
-                <input type="text" name="note" maxlength="200" placeholder="例: 3セット×10回">
+                <input type="text" name="note" maxlength="200" ${NO_ENTER_SUBMIT} placeholder="例: 3セット×10回">
               </div>
               <button class="btn primary" type="submit">画像を追加</button>
             </form>
@@ -1488,7 +1492,7 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
               </div>
               <div class="form-row">
                 <label>セット数・回数(任意)</label>
-                <input type="text" name="note" maxlength="200" placeholder="例: 1日3回">
+                <input type="text" name="note" maxlength="200" ${NO_ENTER_SUBMIT} placeholder="例: 1日3回">
               </div>
               <button class="btn primary" type="submit">HTMLツールを追加</button>
             </form>`
