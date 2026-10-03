@@ -251,7 +251,12 @@ async function removeMemberMedia(memberId, mediaId) {
 // 会員の動画・画像一覧の表示順を1つ上/下に入れ替える(direction: 'up' | 'down')
 async function moveMemberMedia(memberId, mediaId, direction) {
   const db = await getDb();
-  const docs = await db.collection('media').find({ memberId: Number(memberId) }).sort({ _id: 1 }).toArray();
+  // 並び替えに必要なのはidと並び順だけなので、画像データなどの重い項目は読み込まない(速度改善)
+  const docs = await db
+    .collection('media')
+    .find({ memberId: Number(memberId) }, { projection: { _id: 1, sortOrder: 1 } })
+    .sort({ _id: 1 })
+    .toArray();
   const items = docs.map(mapMedia).sort((a, b) => a.sortOrder - b.sortOrder);
   const idx = items.findIndex((m) => m.id === Number(mediaId));
   if (idx === -1) throw new Error('動画・画像が見つかりません');
@@ -259,8 +264,11 @@ async function moveMemberMedia(memberId, mediaId, direction) {
   if (swapIdx < 0 || swapIdx >= items.length) return;
   const a = items[idx];
   const b = items[swapIdx];
-  await db.collection('media').updateOne({ _id: a.id }, { $set: { sortOrder: b.sortOrder } });
-  await db.collection('media').updateOne({ _id: b.id }, { $set: { sortOrder: a.sortOrder } });
+  // 2件の更新を1回の通信でまとめて行う
+  await db.collection('media').bulkWrite([
+    { updateOne: { filter: { _id: a.id }, update: { $set: { sortOrder: b.sortOrder } } } },
+    { updateOne: { filter: { _id: b.id }, update: { $set: { sortOrder: a.sortOrder } } } },
+  ]);
 }
 
 // 動画・画像のセット数・回数メモを後から編集する(管理者のみ)

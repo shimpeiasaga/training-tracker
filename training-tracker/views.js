@@ -443,10 +443,27 @@ const PUSH_CLIENT_SCRIPT = `
 `;
 
 // 専用トレーニングの並び替え(▲▼)専用: ページ全体を再読み込みせず、その場で順番を入れ替える。
-// これにより、並び替えのたびにスクロール位置が上に戻ってしまう問題を根本的に避けられる
+// これにより、並び替えのたびにスクロール位置が上に戻ってしまう問題を根本的に避けられる。
+// 押した瞬間に画面上の順番を入れ替え、サーバーへの保存は裏で行う(待ち時間をなくす)。
+// 連打された場合も保存の順番が崩れないよう、保存リクエストは1件ずつ順番に送る。失敗した時だけ画面を読み込み直す
 const MEDIA_REORDER_SCRIPT = `
 (function () {
   var CIRCLED = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
+  var saveQueue = Promise.resolve();
+  function renumber(list) {
+    var items = list.querySelectorAll('.video-item');
+    items.forEach(function (el, i) {
+      var h4 = el.querySelector('.video-item-head h4');
+      if (h4) {
+        var title = h4.textContent.replace(/^\\S+\\s/, '');
+        h4.textContent = (CIRCLED[i] || i + 1) + ' ' + title;
+      }
+      var upBtn = el.querySelector('button[title="上に移動"]');
+      var downBtn = el.querySelector('button[title="下に移動"]');
+      if (upBtn) upBtn.disabled = i === 0;
+      if (downBtn) downBtn.disabled = i === items.length - 1;
+    });
+  }
   document.addEventListener('submit', function (e) {
     var form = e.target;
     if (!(form instanceof HTMLFormElement)) return;
@@ -460,41 +477,29 @@ const MEDIA_REORDER_SCRIPT = `
     var sibling = direction === 'up' ? item.previousElementSibling : item.nextElementSibling;
     if (!sibling) return;
     e.preventDefault();
-    // ページを再読み込みしないため、共通のローディング表示(「処理中...」)をここで元の▲▼に戻す
+    // ページを再読み込みしないため、共通のローディング表示(「処理中...」)をすぐ元の▲▼に戻す
     var btn = form.querySelector('button');
-    function restoreButton() {
-      if (btn && btn.dataset.originalText) btn.textContent = btn.dataset.originalText;
+    if (btn && btn.dataset.originalText) btn.textContent = btn.dataset.originalText;
+    // 先に画面上の順番を入れ替える(ボタンの有効/無効もここで付け直す)
+    if (direction === 'up') {
+      list.insertBefore(item, sibling);
+    } else {
+      list.insertBefore(sibling, item);
     }
-    fetch(action, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: 'direction=' + direction,
-      credentials: 'same-origin',
-    })
-      .then(function (res) {
+    renumber(list);
+    // サーバーへの保存は裏で順番に行う
+    saveQueue = saveQueue.then(function () {
+      return fetch(action, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'fetch' },
+        body: 'direction=' + direction,
+        credentials: 'same-origin',
+      }).then(function (res) {
         if (!res.ok) throw new Error('failed');
-        restoreButton();
-        if (direction === 'up') {
-          list.insertBefore(item, sibling);
-        } else {
-          list.insertBefore(sibling, item);
-        }
-        var items = list.querySelectorAll('.video-item');
-        items.forEach(function (el, i) {
-          var h4 = el.querySelector('.video-item-head h4');
-          if (h4) {
-            var title = h4.textContent.replace(/^\\S+\\s/, '');
-            h4.textContent = (CIRCLED[i] || i + 1) + ' ' + title;
-          }
-          var upBtn = el.querySelector('button[title="上に移動"]');
-          var downBtn = el.querySelector('button[title="下に移動"]');
-          if (upBtn) upBtn.disabled = i === 0;
-          if (downBtn) downBtn.disabled = i === items.length - 1;
-        });
-      })
-      .catch(function () {
-        location.reload();
       });
+    }).catch(function () {
+      location.reload();
+    });
   });
 })();
 `;

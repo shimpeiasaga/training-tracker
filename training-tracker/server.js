@@ -787,10 +787,20 @@ async function handleRequest(req, res) {
     if (match && method === 'POST') {
       const body = await parseBody(req);
       const direction = body.direction === 'up' ? 'up' : 'down';
+      // ▲▼ボタンの並び替えスクリプト(fetch)からの呼び出しは、ページ全体を返さず結果だけ返して速くする
+      const fromScript = req.headers['x-requested-with'] === 'fetch';
       try {
         await db.moveMemberMedia(match[1], match[2], direction);
       } catch (err) {
-        // 対象が見つからない場合などは何もせず戻る
+        // 対象が見つからない場合などは何もせず戻る(スクリプトからの場合はエラーを返して画面を読み込み直させる)
+        if (fromScript) {
+          res.writeHead(500);
+          return res.end();
+        }
+      }
+      if (fromScript) {
+        res.writeHead(204);
+        return res.end();
       }
       return redirect(res, `/admin/member/${match[1]}`);
     }
