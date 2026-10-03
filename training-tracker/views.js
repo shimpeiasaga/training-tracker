@@ -460,6 +460,11 @@ const MEDIA_REORDER_SCRIPT = `
     var sibling = direction === 'up' ? item.previousElementSibling : item.nextElementSibling;
     if (!sibling) return;
     e.preventDefault();
+    // ページを再読み込みしないため、共通のローディング表示(「処理中...」)をここで元の▲▼に戻す
+    var btn = form.querySelector('button');
+    function restoreButton() {
+      if (btn && btn.dataset.originalText) btn.textContent = btn.dataset.originalText;
+    }
     fetch(action, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -468,6 +473,7 @@ const MEDIA_REORDER_SCRIPT = `
     })
       .then(function (res) {
         if (!res.ok) throw new Error('failed');
+        restoreButton();
         if (direction === 'up') {
           list.insertBefore(item, sibling);
         } else {
