@@ -1,7 +1,9 @@
 // MongoDB Atlas を使ったデータ保存(Renderの再デプロイ・スリープでデータが消えないようにするため)
 // 環境変数 MONGODB_URI が設定されている時だけ使われる(db.js が自動で切り替える)
 const { MongoClient } = require('mongodb');
-const { MAX_MEMBER_MEDIA, MAX_LIBRARY_ITEMS } = require('./stats');
+const { MAX_MEMBER_MEDIA, MAX_LIBRARY_ITEMS, DEFAULT_LIBRARY_CATEGORIES_SEED, DEFAULT_LIBRARY_CATEGORY, MAX_LIBRARY_CATEGORIES, todayStr, nowStr } = require('./stats');
+
+const MAX_AUTO_BACKUPS = 14; // 自動バックアップは直近14件だけ残す
 
 const uri = process.env.MONGODB_URI;
 let clientPromise = null;
@@ -40,6 +42,9 @@ async function ensureIndexes() {
   // expiresを過ぎたセッションをMongo側が自動で削除してくれる(TTLインデックス)
   await db.collection('sessions').createIndex({ expires: 1 }, { expireAfterSeconds: 0 });
   await db.collection('media').createIndex({ memberId: 1 });
+  await db.collection('pushSubscriptions').createIndex({ endpoint: 1 }, { unique: true });
+  await db.collection('pushSubscriptions').createIndex({ userId: 1 });
+  await db.collection('pushSubscriptions').createIndex({ role: 1 });
   await migrateLegacyVideos(db);
 }
 
@@ -63,7 +68,7 @@ async function migrateLegacyVideos(db) {
 }
 
 // --- ログインセッション(Renderがスリープ・再起動してもログイン状態を保つためDBに保存する) ---
-const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30日
+const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 365 * 10; // 10年(実質無期限)
 
 async function createSession(id, user) {
   const db = await getDb();
@@ -85,6 +90,12 @@ async function destroySession(id) {
   await db.collection('sessions').deleteOne({ _id: id });
 }
 
+// その人のログインを全て終了させる(アカウントを削除した時に、削除済みの人がログインしたまま操作できないようにする)
+async function destroySessionsForUser(userId) {
+  const db = await getDb();
+  await db.collection('sessions').deleteMany({ 'user.id': Number(userId) });
+}
+
 // counters コレクションでオートインクリメントの整数IDを発行する
 async function nextSeq(name) {
   const db = await getDb();
@@ -103,10 +114,12 @@ function mapUser(doc) {
   return {
     id: doc._id,
     name: doc.name,
+    displayName: doc.displayName || '',
     username: doc.username,
     passwordHash: doc.passwordHash,
     role: doc.role,
     rewardsGiven: doc.rewardsGiven || 0,
+    excludeFromRanking: !!doc.excludeFromRanking,
   };
 }
 
@@ -134,6 +147,19 @@ async function getAllMembers() {
   return docs.map(mapUser);
 }
 
+// 管理者アカウントの一覧(管理画面の「管理者アカウント」欄で使う。登録順)
+async function getAllAdmins() {
+  const db = await getDb();
+  const docs = await db.collection('users').find({ role: 'admin' }).sort({ _id: 1 }).toArray();
+  return docs.map(mapUser);
+}
+
+async function updateUsername(id, username) {
+  const db = await getDb();
+  await db.collection('users').updateOne({ _id: Number(id) }, { $set: { username } });
+  return getUserById(id);
+}
+
 async function createUser({ name, username, passwordHash, role }) {
   const db = await getDb();
   const id = await nextSeq('users');
@@ -154,6 +180,33 @@ async function updateUserPassword(id, passwordHash) {
   return getUserById(id);
 }
 
+// 会員が自分で設定できる表示名(会員画面にだけ反映、管理画面の氏名表示には影響しない)
+async function updateUserDisplayName(id, displayName) {
+  const db = await getDb();
+  await db.collection('users').updateOne({ _id: Number(id) }, { $set: { displayName } });
+  return getUserById(id);
+}
+
+// ランキングから除外するかどうか(スタッフのテスト用アカウントなどを対象外にするため)
+async function setMemberRankingExcluded(id, excluded) {
+  const db = await getDb();
+  await db.collection('users').updateOne({ _id: Number(id) }, { $set: { excludeFromRanking: !!excluded } });
+  return getUserById(id);
+}
+
+// --- アプリ全体の設定(現時点ではランクアップ時のお祝いメッセージのみ) ---
+async function getSettings() {
+  const db = await getDb();
+  const doc = await db.collection('settings').findOne({ _id: 'global' });
+  return { rankUpMessages: (doc && doc.rankUpMessages) || {} };
+}
+
+async function updateSettings(patch) {
+  const db = await getDb();
+  await db.collection('settings').updateOne({ _id: 'global' }, { $set: patch }, { upsert: true });
+  return getSettings();
+}
+
 // 会員ごとの動画・画像(合わせて最大MAX_MEMBER_MEDIA件、独立したコレクションとして保存する)
 function mapMedia(doc) {
   if (!doc) return undefined;
@@ -165,22 +218,37 @@ function mapMedia(doc) {
     url: doc.url,
     imageData: doc.imageData,
     mimeType: doc.mimeType,
+    htmlContent: doc.htmlContent,
     note: doc.note || '',
     createdAt: doc.createdAt,
+    sortOrder: doc.sortOrder != null ? doc.sortOrder : doc._id,
   };
 }
 
+// sortOrderが無い古いデータはidをそのまま並び順として使う(見た目の順番は変わらない)
+// 一覧では画像本体(imageData)は取得しない(ページが重くなるのを防ぐため。
+// 画像は専用URL(/media/:id/image)から個別に配信する)
 async function getMediaForMember(memberId) {
   const db = await getDb();
   const docs = await db
     .collection('media')
-    .find({ memberId: Number(memberId) })
+    .find({ memberId: Number(memberId) }, { projection: { imageData: 0 } })
     .sort({ _id: 1 })
     .toArray();
-  return docs.map(mapMedia);
+  return docs.map(mapMedia).sort((a, b) => a.sortOrder - b.sortOrder);
 }
 
-async function addMemberMedia(memberId, { type, title, url, imageData, mimeType, note, createdAt }) {
+// 画像そのもの(base64)を1件だけ取り出す(ページHTMLに埋め込まず、専用URLで配信するため)
+async function getMediaImageById(mediaId) {
+  const db = await getDb();
+  const doc = await db
+    .collection('media')
+    .findOne({ _id: Number(mediaId) }, { projection: { memberId: 1, mimeType: 1, imageData: 1 } });
+  if (!doc) return null;
+  return { memberId: doc.memberId, mimeType: doc.mimeType, imageData: doc.imageData };
+}
+
+async function addMemberMedia(memberId, { type, title, url, imageData, mimeType, htmlContent, note, createdAt }) {
   const db = await getDb();
   const user = await db.collection('users').findOne({ _id: Number(memberId) });
   if (!user) throw new Error('会員が見つかりません');
@@ -189,7 +257,7 @@ async function addMemberMedia(memberId, { type, title, url, imageData, mimeType,
     throw new Error(`動画・画像は合わせて最大${MAX_MEMBER_MEDIA}件までです`);
   }
   const id = await nextSeq('media');
-  const doc = { _id: id, memberId: Number(memberId), type, title, url, imageData, mimeType, note, createdAt };
+  const doc = { _id: id, memberId: Number(memberId), type, title, url, imageData, mimeType, htmlContent, note, createdAt, sortOrder: id };
   await db.collection('media').insertOne(doc);
   return mapMedia(doc);
 }
@@ -197,6 +265,29 @@ async function addMemberMedia(memberId, { type, title, url, imageData, mimeType,
 async function removeMemberMedia(memberId, mediaId) {
   const db = await getDb();
   await db.collection('media').deleteOne({ _id: Number(mediaId), memberId: Number(memberId) });
+}
+
+// 会員の動画・画像一覧の表示順を1つ上/下に入れ替える(direction: 'up' | 'down')
+async function moveMemberMedia(memberId, mediaId, direction) {
+  const db = await getDb();
+  // 並び替えに必要なのはidと並び順だけなので、画像データなどの重い項目は読み込まない(速度改善)
+  const docs = await db
+    .collection('media')
+    .find({ memberId: Number(memberId) }, { projection: { _id: 1, sortOrder: 1 } })
+    .sort({ _id: 1 })
+    .toArray();
+  const items = docs.map(mapMedia).sort((a, b) => a.sortOrder - b.sortOrder);
+  const idx = items.findIndex((m) => m.id === Number(mediaId));
+  if (idx === -1) throw new Error('動画・画像が見つかりません');
+  const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+  if (swapIdx < 0 || swapIdx >= items.length) return;
+  const a = items[idx];
+  const b = items[swapIdx];
+  // 2件の更新を1回の通信でまとめて行う
+  await db.collection('media').bulkWrite([
+    { updateOne: { filter: { _id: a.id }, update: { $set: { sortOrder: b.sortOrder } } } },
+    { updateOne: { filter: { _id: b.id }, update: { $set: { sortOrder: a.sortOrder } } } },
+  ]);
 }
 
 // 動画・画像のセット数・回数メモを後から編集する(管理者のみ)
@@ -219,24 +310,110 @@ function mapLibraryItem(doc) {
     url: doc.url,
     imageData: doc.imageData,
     mimeType: doc.mimeType,
+    htmlContent: doc.htmlContent,
+    category: doc.category || DEFAULT_LIBRARY_CATEGORY,
     createdAt: doc.createdAt,
   };
 }
 
+// 一覧では画像本体(imageData)は取得しない(専用URLから個別に配信するため)
 async function getLibrary() {
   const db = await getDb();
-  const docs = await db.collection('library').find({}).sort({ _id: -1 }).toArray();
+  const docs = await db.collection('library').find({}, { projection: { imageData: 0 } }).sort({ _id: -1 }).toArray();
   return docs.map(mapLibraryItem);
 }
 
-async function addLibraryItem({ type, title, url, imageData, mimeType, createdAt }) {
+// 画像そのもの(base64)を1件だけ取り出す(ページHTMLに埋め込まず、専用URLで配信するため)
+async function getLibraryImageById(libraryId) {
+  const db = await getDb();
+  const doc = await db
+    .collection('library')
+    .findOne({ _id: Number(libraryId) }, { projection: { mimeType: 1, imageData: 1 } });
+  if (!doc) return null;
+  return { mimeType: doc.mimeType, imageData: doc.imageData };
+}
+
+const LIBRARY_CATEGORIES_DOC_ID = 'libraryCategories';
+
+// カテゴリー一覧を保証する(settingsコレクションの1ドキュメントに保存。初回はシード値で作成、「その他」は必ず含める)
+async function ensureCategoriesDoc(db) {
+  let doc = await db.collection('settings').findOne({ _id: LIBRARY_CATEGORIES_DOC_ID });
+  if (!doc) {
+    doc = { _id: LIBRARY_CATEGORIES_DOC_ID, list: DEFAULT_LIBRARY_CATEGORIES_SEED.slice() };
+    await db.collection('settings').insertOne(doc);
+  }
+  if (!doc.list.includes(DEFAULT_LIBRARY_CATEGORY)) {
+    doc.list.push(DEFAULT_LIBRARY_CATEGORY);
+    await db.collection('settings').updateOne({ _id: LIBRARY_CATEGORIES_DOC_ID }, { $set: { list: doc.list } });
+  }
+  return doc.list;
+}
+
+async function getLibraryCategories() {
+  const db = await getDb();
+  const list = await ensureCategoriesDoc(db);
+  return list.slice();
+}
+
+// カテゴリーを追加する(「その他」の手前に挿入し、「その他」が常に最後になるようにする)
+async function addLibraryCategory(name) {
+  const db = await getDb();
+  const list = await ensureCategoriesDoc(db);
+  const trimmed = (name || '').trim();
+  if (!trimmed) throw new Error('カテゴリー名を入力してください');
+  if (trimmed.length > 20) throw new Error('カテゴリー名は20文字までです');
+  if (list.includes(trimmed)) throw new Error('同じ名前のカテゴリーがすでにあります');
+  if (list.length >= MAX_LIBRARY_CATEGORIES) throw new Error(`カテゴリーは最大${MAX_LIBRARY_CATEGORIES}件までです`);
+  const newList = list.slice();
+  const otherIdx = newList.indexOf(DEFAULT_LIBRARY_CATEGORY);
+  if (otherIdx === -1) newList.push(trimmed);
+  else newList.splice(otherIdx, 0, trimmed);
+  await db.collection('settings').updateOne({ _id: LIBRARY_CATEGORIES_DOC_ID }, { $set: { list: newList } });
+  return newList;
+}
+
+// カテゴリー名を変更する(該当する素材のカテゴリーも一緒に更新する)。「その他」は変更不可
+async function renameLibraryCategory(oldName, newName) {
+  const db = await getDb();
+  const list = await ensureCategoriesDoc(db);
+  if (oldName === DEFAULT_LIBRARY_CATEGORY) throw new Error('「その他」の名前は変更できません');
+  const idx = list.indexOf(oldName);
+  if (idx === -1) throw new Error('カテゴリーが見つかりません');
+  const trimmed = (newName || '').trim();
+  if (!trimmed) throw new Error('カテゴリー名を入力してください');
+  if (trimmed.length > 20) throw new Error('カテゴリー名は20文字までです');
+  if (trimmed !== oldName && list.includes(trimmed)) throw new Error('同じ名前のカテゴリーがすでにあります');
+  const newList = list.slice();
+  newList[idx] = trimmed;
+  await db.collection('settings').updateOne({ _id: LIBRARY_CATEGORIES_DOC_ID }, { $set: { list: newList } });
+  await db.collection('library').updateMany({ category: oldName }, { $set: { category: trimmed } });
+  return newList;
+}
+
+// カテゴリーを削除する(このカテゴリーを使っていた素材は「その他」に移す)。「その他」は削除不可
+async function deleteLibraryCategory(name) {
+  const db = await getDb();
+  const list = await ensureCategoriesDoc(db);
+  if (name === DEFAULT_LIBRARY_CATEGORY) throw new Error('「その他」は削除できません');
+  const idx = list.indexOf(name);
+  if (idx === -1) throw new Error('カテゴリーが見つかりません');
+  const newList = list.slice();
+  newList.splice(idx, 1);
+  await db.collection('settings').updateOne({ _id: LIBRARY_CATEGORIES_DOC_ID }, { $set: { list: newList } });
+  await db.collection('library').updateMany({ category: name }, { $set: { category: DEFAULT_LIBRARY_CATEGORY } });
+  return newList;
+}
+
+async function addLibraryItem({ type, title, url, imageData, mimeType, htmlContent, category, createdAt }) {
   const db = await getDb();
   const count = await db.collection('library').countDocuments({});
   if (count >= MAX_LIBRARY_ITEMS) {
     throw new Error(`素材ライブラリは最大${MAX_LIBRARY_ITEMS}件までです`);
   }
+  const categories = await ensureCategoriesDoc(db);
+  const cat = categories.includes(category) ? category : DEFAULT_LIBRARY_CATEGORY;
   const id = await nextSeq('library');
-  const doc = { _id: id, type, title, url, imageData, mimeType, createdAt };
+  const doc = { _id: id, type, title, url, imageData, mimeType, htmlContent, category: cat, createdAt };
   await db.collection('library').insertOne(doc);
   return mapLibraryItem(doc);
 }
@@ -244,6 +421,15 @@ async function addLibraryItem({ type, title, url, imageData, mimeType, createdAt
 async function removeLibraryItem(libraryId) {
   const db = await getDb();
   await db.collection('library').deleteOne({ _id: Number(libraryId) });
+}
+
+// ライブラリ素材のカテゴリーを変更する
+async function updateLibraryItemCategory(libraryId, category) {
+  const db = await getDb();
+  const categories = await ensureCategoriesDoc(db);
+  const cat = categories.includes(category) ? category : DEFAULT_LIBRARY_CATEGORY;
+  const result = await db.collection('library').updateOne({ _id: Number(libraryId) }, { $set: { category: cat } });
+  if (result.matchedCount === 0) throw new Error('素材が見つかりません');
 }
 
 // ライブラリの素材を、指定した会員の動画・画像一覧にコピーする(ライブラリ側は残る)
@@ -266,6 +452,7 @@ async function assignLibraryItemToMember(memberId, libraryId, note, createdAt) {
     url: libItem.url,
     imageData: libItem.imageData,
     mimeType: libItem.mimeType,
+    htmlContent: libItem.htmlContent,
     note: note || '',
     createdAt,
   };
@@ -346,32 +533,40 @@ async function addMessage({ memberId, senderRole, senderName, body, createdAt })
   return mapMessage(doc);
 }
 
-// readerRoleから見て「相手」が送った未読メッセージがあるか
-async function hasUnreadMessages(memberId, readerRole) {
+// 未読の条件。会員発信のメッセージは管理者ごとに既読を管理する(readByに既読にした管理者のIDを入れる)ので、
+// 管理者が複数いても、1人が開いただけで他の管理者の通知が消えることはない。
+// (readはこの仕組みより前に既読になったメッセージの印。read:trueのものは全管理者にとって既読扱い)
+function unreadFilter(readerRole, readerId) {
+  if (readerRole === 'admin') {
+    return { senderRole: 'member', read: false, readBy: { $ne: Number(readerId) } };
+  }
+  return { senderRole: 'admin', read: false };
+}
+
+// readerRole(とreaderId)から見て「相手」が送った未読メッセージがあるか
+async function hasUnreadMessages(memberId, readerRole, readerId) {
   const db = await getDb();
-  const otherRole = readerRole === 'admin' ? 'member' : 'admin';
   const count = await db.collection('messages').countDocuments({
     memberId: Number(memberId),
-    senderRole: otherRole,
-    read: false,
+    ...unreadFilter(readerRole, readerId),
   });
   return count > 0;
 }
 
-// readerRoleから見て「相手」が送った未読メッセージを全て既読にする
-async function markMessagesRead(memberId, readerRole) {
+// readerRole(とreaderId)から見て「相手」が送った未読メッセージを全て既読にする
+async function markMessagesRead(memberId, readerRole, readerId) {
   const db = await getDb();
-  const otherRole = readerRole === 'admin' ? 'member' : 'admin';
-  await db.collection('messages').updateMany(
-    { memberId: Number(memberId), senderRole: otherRole, read: false },
-    { $set: { read: true } }
-  );
+  const filter = { memberId: Number(memberId), ...unreadFilter(readerRole, readerId) };
+  const update = readerRole === 'admin'
+    ? { $addToSet: { readBy: Number(readerId) } }
+    : { $set: { read: true } };
+  await db.collection('messages').updateMany(filter, update);
 }
 
-// 管理者ダッシュボード用: 未読(会員発信)メッセージがある会員の一覧
-async function getMembersWithUnreadMessages() {
+// 管理者ダッシュボード用: その管理者(adminId)にとって未読の会員発信メッセージがある会員の一覧
+async function getMembersWithUnreadMessages(adminId) {
   const db = await getDb();
-  const memberIds = await db.collection('messages').distinct('memberId', { senderRole: 'member', read: false });
+  const memberIds = await db.collection('messages').distinct('memberId', unreadFilter('admin', adminId));
   if (!memberIds.length) return [];
   const docs = await db.collection('users').find({ _id: { $in: memberIds } }).toArray();
   return docs.map((u) => ({ id: u._id, name: u.name }));
@@ -389,6 +584,32 @@ async function deleteMessage(messageId, requesterRole, requesterId) {
     throw new Error('このメッセージを削除する権限がありません');
   }
   await db.collection('messages').deleteOne({ _id: Number(messageId) });
+}
+
+// --- プッシュ通知の購読情報(ホーム画面に追加したスマホなどに通知を送るため) ---
+// 同じ端末から再登録された場合はendpointで上書きする(重複登録・重複通知を防ぐ)
+async function addPushSubscription(userId, role, subscription) {
+  const db = await getDb();
+  await db.collection('pushSubscriptions').updateOne(
+    { endpoint: subscription.endpoint },
+    { $set: { userId: Number(userId), role, endpoint: subscription.endpoint, keys: subscription.keys, createdAt: nowStr() } },
+    { upsert: true }
+  );
+}
+
+async function removePushSubscriptionByEndpoint(endpoint) {
+  const db = await getDb();
+  await db.collection('pushSubscriptions').deleteOne({ endpoint });
+}
+
+async function getPushSubscriptionsForUser(userId) {
+  const db = await getDb();
+  return db.collection('pushSubscriptions').find({ userId: Number(userId) }).toArray();
+}
+
+async function getPushSubscriptionsForRole(role) {
+  const db = await getDb();
+  return db.collection('pushSubscriptions').find({ role }).toArray();
 }
 
 // --- 会員向け掲示板(会員が投稿、返信できるのは管理者のみ) ---
@@ -446,6 +667,7 @@ async function exportRaw() {
   const posts = await db.collection('posts').find({}).toArray();
   const media = await db.collection('media').find({}).toArray();
   const library = await db.collection('library').find({}).toArray();
+  const categories = await ensureCategoriesDoc(db);
   const usersCounter = await db.collection('counters').findOne({ _id: 'users' });
   const checkinsCounter = await db.collection('counters').findOne({ _id: 'checkins' });
   const messagesCounter = await db.collection('counters').findOne({ _id: 'messages' });
@@ -488,6 +710,7 @@ async function exportRaw() {
       url: m.url,
       imageData: m.imageData,
       mimeType: m.mimeType,
+      htmlContent: m.htmlContent,
       note: m.note || '',
       createdAt: m.createdAt,
     })),
@@ -498,8 +721,11 @@ async function exportRaw() {
       url: m.url,
       imageData: m.imageData,
       mimeType: m.mimeType,
+      htmlContent: m.htmlContent,
+      category: m.category || DEFAULT_LIBRARY_CATEGORY,
       createdAt: m.createdAt,
     })),
+    categories,
     nextUserId: (usersCounter ? usersCounter.seq : 0) + 1,
     nextCheckinId: (checkinsCounter ? checkinsCounter.seq : 0) + 1,
     nextMessageId: (messagesCounter ? messagesCounter.seq : 0) + 1,
@@ -509,6 +735,45 @@ async function exportRaw() {
     nextLibraryId: (libraryCounter ? libraryCounter.seq : 0) + 1,
   };
   return JSON.stringify(data, null, 2);
+}
+
+// 自動バックアップの一覧(中身のデータは含めない、日付が新しい順)
+async function listBackups() {
+  const db = await getDb();
+  const docs = await db
+    .collection('backups')
+    .find({}, { projection: { data: 0 } })
+    .sort({ date: -1 })
+    .toArray();
+  return docs.map((d) => ({ id: d._id, date: d.date, createdAt: d.createdAt }));
+}
+
+// 自動バックアップの中身(JSON文字列)を1件取得する
+async function getBackupRaw(id) {
+  const db = await getDb();
+  const doc = await db.collection('backups').findOne({ _id: Number(id) });
+  return doc ? doc.data : null;
+}
+
+// 1日1回、まだ今日のバックアップが無ければ自動で作成する(会員・管理者どちらかがアクセスした時に呼ばれる)
+// 古いものは自動で削除し、件数が増えすぎないようにする
+async function ensureDailyBackup() {
+  const db = await getDb();
+  const today = todayStr();
+  const already = await db.collection('backups').findOne({ date: today });
+  if (already) return;
+  const snapshot = await exportRaw();
+  const id = await nextSeq('backups');
+  await db.collection('backups').insertOne({ _id: id, date: today, createdAt: nowStr(), data: snapshot });
+  const all = await db
+    .collection('backups')
+    .find({}, { projection: { data: 0 } })
+    .sort({ date: -1 })
+    .toArray();
+  if (all.length > MAX_AUTO_BACKUPS) {
+    const toDelete = all.slice(MAX_AUTO_BACKUPS).map((d) => d._id);
+    await db.collection('backups').deleteMany({ _id: { $in: toDelete } });
+  }
 }
 
 async function importRaw(jsonStr) {
@@ -559,6 +824,7 @@ async function importRaw(jsonStr) {
         url: m.url,
         imageData: m.imageData,
         mimeType: m.mimeType,
+        htmlContent: m.htmlContent,
         note: m.note || '',
         createdAt: m.createdAt,
       }))
@@ -598,6 +864,8 @@ async function importRaw(jsonStr) {
         url: m.url,
         imageData: m.imageData,
         mimeType: m.mimeType,
+        htmlContent: m.htmlContent,
+        category: m.category || DEFAULT_LIBRARY_CATEGORY,
         createdAt: m.createdAt,
       }))
     );
@@ -616,19 +884,26 @@ async function importRaw(jsonStr) {
   await db.collection('counters').updateOne({ _id: 'replies' }, { $set: { seq: maxReplyId } }, { upsert: true });
   await db.collection('counters').updateOne({ _id: 'media' }, { $set: { seq: maxMediaId } }, { upsert: true });
   await db.collection('counters').updateOne({ _id: 'library' }, { $set: { seq: maxLibraryId } }, { upsert: true });
+  const categories = Array.isArray(parsed.categories) && parsed.categories.length ? parsed.categories : DEFAULT_LIBRARY_CATEGORIES_SEED.slice();
+  await db.collection('settings').updateOne({ _id: LIBRARY_CATEGORIES_DOC_ID }, { $set: { list: categories } }, { upsert: true });
 }
 
 module.exports = {
   backend: 'mongo',
   ensureIndexes,
   createSession,
+  destroySessionsForUser,
   getSession,
   destroySession,
   getUserByUsername,
   getUserById,
   getAllMembers,
+  getAllAdmins,
+  updateUsername,
   createUser,
   updateUserPassword,
+  updateUserDisplayName,
+  setMemberRankingExcluded,
   deleteUser,
   getCheckinsForUser,
   hasCheckinForDate,
@@ -638,12 +913,22 @@ module.exports = {
   getAllCheckins,
   incrementRewardsGiven,
   getMediaForMember,
+  getMediaImageById,
   addMemberMedia,
   removeMemberMedia,
+  moveMemberMedia,
   updateMemberMediaNote,
+  getSettings,
+  updateSettings,
   getLibrary,
+  getLibraryImageById,
+  getLibraryCategories,
+  addLibraryCategory,
+  renameLibraryCategory,
+  deleteLibraryCategory,
   addLibraryItem,
   removeLibraryItem,
+  updateLibraryItemCategory,
   assignLibraryItemToMember,
   getMessagesForMember,
   hasUnreadMessages,
@@ -651,10 +936,17 @@ module.exports = {
   getMembersWithUnreadMessages,
   addMessage,
   deleteMessage,
+  addPushSubscription,
+  removePushSubscriptionByEndpoint,
+  getPushSubscriptionsForUser,
+  getPushSubscriptionsForRole,
   getBoardPosts,
   addBoardPost,
   addBoardReply,
   deleteBoardPost,
   exportRaw,
   importRaw,
+  listBackups,
+  getBackupRaw,
+  ensureDailyBackup,
 };

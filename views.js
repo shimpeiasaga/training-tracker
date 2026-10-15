@@ -1,5 +1,5 @@
 // HTMLをテンプレートエンジンなしで生成する(外部依存なし)
-const { MONTHLY_GOAL, REWARD_MONTHS, MAX_MEMBER_MEDIA, MAX_LIBRARY_ITEMS } = require('./stats');
+const { MONTHLY_GOAL, REWARD_MONTHS, MAX_MEMBER_MEDIA, MAX_LIBRARY_ITEMS, DEFAULT_LIBRARY_CATEGORY, MAX_LIBRARY_CATEGORIES, STREAK_BADGES, monthKey } = require('./stats');
 const CHART_JS = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js';
 
 function escapeHtml(str) {
@@ -10,6 +10,10 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
+
+// セット数・回数の入力欄でEnterキーを押してもフォームを送信しない(追加・保存ボタンを押した時だけ送信する)。
+// 日本語入力の変換確定のEnterはそのまま通す
+const NO_ENTER_SUBMIT = `onkeydown="if(event.key===&#39;Enter&#39;&amp;&amp;!event.isComposing){event.preventDefault();}"`;
 
 // YouTubeのURL(watch/短縮/shorts/埋め込み)から埋め込み用URLを作る。YouTube以外はnull
 function youtubeEmbedUrl(url) {
@@ -27,9 +31,23 @@ function videoPlayerHtml(video) {
   return `<p style="font-size:0.9rem;"><a href="${escapeHtml(video.url)}" target="_blank" rel="noopener">動画を開く &rarr;</a></p>`;
 }
 
-// 画像1枚ぶんの表示(base64で保存した画像データをそのまま埋め込む)
-function imageDisplayHtml(item) {
-  return `<img class="media-image" src="data:${escapeHtml(item.mimeType)};base64,${item.imageData}" alt="${escapeHtml(item.title)}">`;
+// 画像1枚ぶんの表示(base64をページに埋め込まず、専用URLから読み込む。ページを軽くし、
+// ブラウザに画像だけキャッシュさせるため)。会員の動画・画像一覧は/media/、素材ライブラリは/library/から配信されるため、
+// どちらのidかをsourceで区別する
+function imageDisplayHtml(item, source = 'media') {
+  return `<img class="media-image" src="/${source}/${item.id}/image" alt="${escapeHtml(item.title)}" loading="lazy">`;
+}
+
+// 自己完結型HTMLツール(呼吸法など)の表示。sandboxでスクリプトのみ許可し、ホスト側から隔離する
+function htmlToolEmbedHtml(item) {
+  return `<div class="html-embed"><iframe sandbox="allow-scripts" srcdoc="${escapeHtml(item.htmlContent || '')}"></iframe></div>`;
+}
+
+// 種類に応じた表示切り替え(動画・画像・HTMLツール)。sourceは画像の配信元('media'=会員の一覧、'library'=素材ライブラリ)
+function mediaEmbedHtml(item, source = 'media') {
+  if (item.type === 'image') return imageDisplayHtml(item, source);
+  if (item.type === 'html') return htmlToolEmbedHtml(item);
+  return videoPlayerHtml(item);
 }
 
 // 番号表示用(①②③...)。MAX_MEMBER_MEDIAが10件までなので⑩まであれば足りる
@@ -48,9 +66,19 @@ function mediaListHtml(media, { deletable = false, memberId } = {}) {
           <h4>${CIRCLED_NUMS[i] || i + 1} ${escapeHtml(v.title)}</h4>
           ${
             deletable
-              ? `<form method="POST" action="/admin/members/${memberId}/media/${v.id}/delete" onsubmit="return confirm('削除しますか?');">
-                  <button class="btn danger" type="submit">削除</button>
-                </form>`
+              ? `<div class="video-item-actions">
+                  <form method="POST" action="/admin/members/${memberId}/media/${v.id}/move" style="display:inline;">
+                    <input type="hidden" name="direction" value="up">
+                    <button class="btn" type="submit" title="上に移動" ${i === 0 ? 'disabled' : ''}>▲</button>
+                  </form>
+                  <form method="POST" action="/admin/members/${memberId}/media/${v.id}/move" style="display:inline;">
+                    <input type="hidden" name="direction" value="down">
+                    <button class="btn" type="submit" title="下に移動" ${i === media.length - 1 ? 'disabled' : ''}>▼</button>
+                  </form>
+                  <form method="POST" action="/admin/members/${memberId}/media/${v.id}/delete" onsubmit="return confirm('削除しますか?');" style="display:inline;">
+                    <button class="btn danger" type="submit">削除</button>
+                  </form>
+                </div>`
               : ''
           }
         </div>
@@ -61,58 +89,126 @@ function mediaListHtml(media, { deletable = false, memberId } = {}) {
                 <summary>${v.note ? 'セット数・回数を編集' : 'セット数・回数を追加'}</summary>
                 <form method="POST" action="/admin/members/${memberId}/media/${v.id}/note" class="inline-form">
                   <div class="form-row">
-                    <input type="text" name="note" maxlength="200" value="${escapeHtml(v.note || '')}" placeholder="例: 3セット×10回">
+                    <input type="text" name="note" maxlength="200" ${NO_ENTER_SUBMIT} value="${escapeHtml(v.note || '')}" placeholder="例: 3セット×10回">
                   </div>
                   <button class="btn" type="submit">保存</button>
                 </form>
               </details>`
             : ''
         }
-        ${v.type === 'image' ? imageDisplayHtml(v) : videoPlayerHtml(v)}
+        ${mediaEmbedHtml(v)}
       </div>`
     )
     .join('');
   return `<div class="video-list">${items}</div>`;
 }
 
-// 素材ライブラリの一覧表示。mode='manage'は削除ボタン付き(ライブラリ管理画面用)、
-// mode='pick'は会員に追加するための小さいフォーム付き(会員詳細画面の選択欄用)
-function libraryListHtml(library, { mode = 'manage', memberId } = {}) {
+// ライブラリ選択欄用の小さいサムネイル(画像はミニ画像、動画・HTMLツールはアイコン)
+function libraryThumbHtml(v) {
+  if (v.type === 'image') {
+    return `<img class="lib-pick-thumb" src="/library/${v.id}/image" alt="" loading="lazy">`;
+  }
+  const icon = v.type === 'html' ? '🧘' : '🎥';
+  return `<div class="lib-pick-thumb lib-pick-icon">${icon}</div>`;
+}
+
+// カテゴリー一覧(管理画面で登録された順)の<option>一覧(selectedを選択状態にする)
+function categoryOptionsHtml(selected, categories) {
+  return categories
+    .map((c) => `<option value="${escapeHtml(c)}" ${c === selected ? 'selected' : ''}>${escapeHtml(c)}</option>`)
+    .join('');
+}
+
+// 素材をカテゴリー(渡されたcategoriesの順)ごとにグループ分けする。未設定・不正な値は「その他」扱い
+function groupLibraryByCategory(library, categories) {
+  const groups = new Map(categories.map((c) => [c, []]));
+  if (!groups.has(DEFAULT_LIBRARY_CATEGORY)) groups.set(DEFAULT_LIBRARY_CATEGORY, []);
+  library.forEach((v) => {
+    const cat = groups.has(v.category) ? v.category : DEFAULT_LIBRARY_CATEGORY;
+    groups.get(cat).push(v);
+  });
+  return Array.from(groups.entries()).filter(([, items]) => items.length);
+}
+
+// 素材ライブラリの一覧表示。mode='manage'は削除ボタン・カテゴリー変更付きでフルサイズ表示(ライブラリ管理画面用)、
+// mode='pick'はサムネイル+タイトルのみのコンパクトな行表示(会員詳細画面の選択欄用)。どちらもカテゴリーごとに見出しを付けて表示する
+function libraryListHtml(library, { mode = 'manage', memberId, categories = [] } = {}) {
   if (!library || !library.length) {
     return '<p style="font-size:0.85rem;color:var(--muted);margin:0;">まだライブラリに素材がありません</p>';
   }
-  const items = library
+  const groups = groupLibraryByCategory(library, categories);
+
+  if (mode === 'pick') {
+    return groups
+      .map(
+        ([cat, items]) => `
+        <details class="lib-category-group">
+          <summary class="lib-category-heading">${escapeHtml(cat)}(${items.length})</summary>
+          <div class="lib-pick-list" style="margin-top:10px;">
+            ${items
+              .map(
+                (v) => `
+              <details class="lib-pick-item">
+                <summary class="lib-pick-row">
+                  ${libraryThumbHtml(v)}
+                  <div class="lib-pick-title">${escapeHtml(v.title)}</div>
+                  <span class="lib-pick-preview-hint">タップで確認</span>
+                </summary>
+                <div class="lib-pick-preview">${mediaEmbedHtml(v, 'library')}</div>
+                <form method="POST" action="/admin/members/${memberId}/media/from-library/${v.id}" class="lib-pick-form">
+                  <input type="text" name="note" maxlength="200" ${NO_ENTER_SUBMIT} placeholder="セット数・回数(任意)">
+                  <button class="btn primary" type="submit">追加</button>
+                </form>
+              </details>`
+              )
+              .join('')}
+          </div>
+        </details>`
+      )
+      .join('');
+  }
+
+  return groups
     .map(
-      (v) => `
-      <div class="video-item">
-        <div class="video-item-head">
-          <h4>${v.type === 'image' ? '📷' : '🎥'} ${escapeHtml(v.title)}</h4>
-          ${
-            mode === 'manage'
-              ? `<form method="POST" action="/admin/library/${v.id}/delete" onsubmit="return confirm('ライブラリから削除しますか?(会員に既に追加済みの分は残ります)');">
+      ([cat, items]) => `
+      <details class="lib-category-group">
+        <summary class="lib-category-heading">${escapeHtml(cat)}(${items.length})</summary>
+        <div class="video-list" style="margin-top:10px;">
+          ${items
+            .map(
+              (v) => `
+            <div class="video-item">
+              <div class="video-item-head">
+                <h4>${v.type === 'image' ? '📷' : v.type === 'html' ? '🧘' : '🎥'} ${escapeHtml(v.title)}</h4>
+                <form method="POST" action="/admin/library/${v.id}/delete" onsubmit="return confirm('ライブラリから削除しますか?(会員に既に追加済みの分は残ります)');">
                   <button class="btn danger" type="submit">削除</button>
-                </form>`
-              : ''
-          }
+                </form>
+              </div>
+              <details class="history-note-edit" style="margin-bottom:8px;">
+                <summary>カテゴリーを変更(現在: ${escapeHtml(cat)})</summary>
+                <form method="POST" action="/admin/library/${v.id}/category" class="inline-form">
+                  <div class="form-row">
+                    <select name="category">${categoryOptionsHtml(cat, categories)}</select>
+                  </div>
+                  <button class="btn" type="submit">変更</button>
+                </form>
+              </details>
+              ${
+                v.type === 'html'
+                  ? `<a href="data:text/html;charset=utf-8;base64,${Buffer.from(v.htmlContent || '', 'utf8').toString('base64')}" download="${escapeHtml(v.title)}.html" class="btn" style="display:inline-block;margin-bottom:8px;">⬇️ HTMLファイルをダウンロード(他サイトへの移行用)</a>`
+                  : ''
+              }
+              ${mediaEmbedHtml(v, 'library')}
+            </div>`
+            )
+            .join('')}
         </div>
-        ${
-          mode === 'pick'
-            ? `<form method="POST" action="/admin/members/${memberId}/media/from-library/${v.id}" class="inline-form" style="margin-bottom:10px;">
-                <div class="form-row" style="flex:2;">
-                  <input type="text" name="note" maxlength="200" placeholder="セット数・回数(任意) 例: 3セット×10回">
-                </div>
-                <button class="btn primary" type="submit">この会員に追加</button>
-              </form>`
-            : ''
-        }
-        ${v.type === 'image' ? imageDisplayHtml(v) : videoPlayerHtml(v)}
-      </div>`
+      </details>`
     )
     .join('');
-  return `<div class="video-list">${items}</div>`;
 }
 
-function layout({ title, body, script = '', topbar = '' }) {
+function layout({ title, body, script = '', topbar = '', extraScript = '' }) {
   return `<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -134,21 +230,512 @@ ${topbar}
 ${body}
 </div>
 ${script ? `<script>${script}</script>` : ''}
+<script>${BUTTON_LOADING_SCRIPT}</script>
+<script>${SCROLL_RESTORE_SCRIPT}</script>
+<script>${MESSAGE_SCROLL_SCRIPT}</script>
+<script>${PUSH_CLIENT_SCRIPT}</script>
+<script>${APP_RESUME_REFRESH_SCRIPT}</script>
+<script>${MESSAGE_POLL_SCRIPT}</script>
+${extraScript ? `<script>${extraScript}</script>` : ''}
 </body>
 </html>`;
 }
 
-function topbar(label, showLogout = true, showSiteTitle = false) {
+// ボタンを押した直後、通信のラグで「押せているか分からない」状態を防ぐため、
+// 送信ボタンを一時的に無効化してテキストを変える(全ページ共通)。
+// メッセージ送信系のボタン(文言が「送信」)は「送信中...」、トレーニング完了チェックのボタンは
+// 記録する時は「記録中...」・取り消す時(checkedクラスが付いている)は「処理中...」、それ以外は「処理中...」にする
+const BUTTON_LOADING_SCRIPT = `
+document.addEventListener('submit', function (e) {
+  // confirm()で「キャンセル」された送信(削除確認など)はここでdefaultPreventedになるので何もしない。
+  // バブリング(通常)フェーズで判定することで、confirm()ダイアログの表示より後に確定させている
+  if (e.defaultPrevented) return;
+  var form = e.target;
+  if (!(form instanceof HTMLFormElement)) return;
+  var btn = form.querySelector('button[type="submit"], button:not([type])');
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  btn.dataset.originalText = btn.textContent;
+  var label = btn.textContent.trim();
+  btn.textContent = label === '送信'
+    ? '送信中...'
+    : btn.classList.contains('checkin-btn') && !btn.classList.contains('checked')
+    ? '記録中...'
+    : '処理中...';
+});
+
+// フォームの送信ボタン以外(「詳細」などリンクの<a class="btn">、更新ボタン、
+// トップバーの「戻る」リンクなど)も、クリック直後に見た目を変えて「押せている」ことが分かるようにする
+document.addEventListener('click', function (e) {
+  var link = e.target.closest('a.btn, .topbar .brand a');
+  if (!link || link.target === '_blank' || link.dataset.loading === '1') return;
+  link.dataset.loading = '1';
+  var original = link.textContent;
+  link.style.opacity = '0.6';
+  link.textContent = '読み込み中...';
+  // ダウンロードリンクなどページ移動が起きないケースのために、少し経ったら元に戻す
+  setTimeout(function () {
+    link.style.opacity = '';
+    link.textContent = original;
+    link.dataset.loading = '';
+  }, 4000);
+}, true);
+`;
+
+// ボタンを押して画面が更新されても、押す前のスクロール位置をできるだけ保つ(ページが上に戻ってしまうのを防ぐ)
+const SCROLL_RESTORE_SCRIPT = `
+(function () {
+  if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+  var key = 'scrollY_' + location.pathname;
+  // URLに#video/#messages/#historyなどが付いている場合は、ブラウザ標準のジャンプ機能に任せる。
+  // そちらの方がセクションの高さが変わっても正しい位置に着地できるため、
+  // ここでの座標(px)復元は行わない(行うと標準ジャンプと競合してズレる)
+  if (!location.hash) {
+    var savedY = sessionStorage.getItem(key);
+    if (savedY !== null) {
+      sessionStorage.removeItem(key);
+      var y = parseInt(savedY, 10);
+      var restore = function () { window.scrollTo(0, y); };
+      restore();
+      requestAnimationFrame(restore);
+      setTimeout(restore, 0);
+      setTimeout(restore, 150);
+      window.addEventListener('load', restore);
+    }
+  } else {
+    sessionStorage.removeItem(key);
+  }
+  document.addEventListener('submit', function (e) {
+    if (e.defaultPrevented) return;
+    sessionStorage.setItem(key, window.scrollY);
+  });
+})();
+`;
+
+// メッセージ欄(.msg-thread)は開いた時点で最新のメッセージが見えるよう、常に一番下にスクロールしておく。
+// 過去のメッセージは、その枠内を上にスクロールすれば見られる(ページ全体のスクロールとは別)
+const MESSAGE_SCROLL_SCRIPT = `
+(function () {
+  function scrollThreadsToBottom() {
+    document.querySelectorAll('.msg-thread').forEach(function (el) {
+      el.scrollTop = el.scrollHeight;
+    });
+  }
+  scrollThreadsToBottom();
+  requestAnimationFrame(scrollThreadsToBottom);
+  window.addEventListener('load', scrollThreadsToBottom);
+})();
+`;
+
+// ホーム画面のアイコンからアプリを開いた時、スマホ側が「前回見た時のままの画面」を
+// メモリから復元してしまい(bfcache)、サーバーへ問い合わせ直さないことがある。
+// その場合に古い内容のまま表示され続けるのを防ぐため、復元されたことを検知したら読み込み直す
+const APP_RESUME_REFRESH_SCRIPT = `
+window.addEventListener('pageshow', function (event) {
+  if (event.persisted) location.reload();
+});
+`;
+
+// プッシュ通知(service workerからのpostMessage)は端末やタイミングによって届かないことがあるため、
+// メッセージ画面を開いている間は数秒おきに件数を確認し、増えていたら自動で再読み込みする。
+// これにより、通知が来ない・届かない場合でも取りこぼさず最新のやり取りが表示される
+const MESSAGE_POLL_SCRIPT = `
+(function () {
+  var thread = document.querySelector('.msg-thread[data-poll-url]');
+  if (!thread) return;
+  var pollUrl = thread.getAttribute('data-poll-url');
+  var knownCount = parseInt(thread.getAttribute('data-count'), 10) || 0;
+  function checkForNewMessages() {
+    if (document.visibilityState !== 'visible') return;
+    var active = document.activeElement;
+    var isTyping = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA');
+    if (isTyping) return;
+    fetch(pollUrl, { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) {
+        if (data && data.count !== knownCount) location.reload();
+      })
+      .catch(function () {});
+  }
+  setInterval(checkForNewMessages, 8000);
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible') checkForNewMessages();
+  });
+})();
+`;
+
+// プッシュ通知(ホーム画面に追加した端末に、メッセージ受信を知らせる)。
+// サービスワーカーの登録と、「🔔 通知を受け取る」ボタンから購読するための処理
+const PUSH_CLIENT_SCRIPT = `
+(function () {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+  navigator.serviceWorker.register('/sw.js').catch(function () {});
+
+  // 通知が届いたら、開いている画面も一緒に最新の内容へ更新する。
+  // ただし入力中(メッセージ入力欄などにフォーカスがある)は、書きかけの内容が消えないよう更新を見送る
+  navigator.serviceWorker.addEventListener('message', function (event) {
+    if (!event.data || event.data.type !== 'push-refresh') return;
+    var active = document.activeElement;
+    var isTyping = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA');
+    if (isTyping) return;
+    location.reload();
+  });
+
+  function urlBase64ToUint8Array(base64String) {
+    var padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+    var base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    var rawData = window.atob(base64);
+    var outputArray = new Uint8Array(rawData.length);
+    for (var i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+    return outputArray;
+  }
+
+  window.enablePushNotifications = function (btn) {
+    if (btn) { btn.disabled = true; btn.textContent = '設定中...'; }
+    fetch('/push/vapid-public-key')
+      .then(function (r) { return r.json(); })
+      .then(function (info) {
+        if (!info.enabled) {
+          alert('現在、通知機能は準備中です。');
+          throw new Error('push disabled');
+        }
+        return Notification.requestPermission().then(function (perm) {
+          if (perm !== 'granted') {
+            alert('通知が許可されませんでした。端末(またはブラウザ)の設定から通知を許可してください。');
+            throw new Error('denied');
+          }
+          return navigator.serviceWorker.ready;
+        }).then(function (reg) {
+          return reg.pushManager.getSubscription().then(function (existing) {
+            if (existing) return existing;
+            return reg.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey: urlBase64ToUint8Array(info.key),
+            });
+          });
+        });
+      })
+      .then(function (sub) {
+        return fetch('/push/subscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'subscription=' + encodeURIComponent(JSON.stringify(sub)),
+        });
+      })
+      .then(function () {
+        if (btn) { btn.disabled = false; btn.textContent = '✅ 通知をオンにしました'; }
+        try { localStorage.setItem('pushEnabled', '1'); } catch (err) {}
+      })
+      .catch(function () {
+        if (btn) { btn.disabled = false; btn.textContent = '🔔 通知を受け取る'; }
+      });
+  };
+
+  document.addEventListener('DOMContentLoaded', function () {
+    var btn = document.getElementById('push-enable-btn');
+    if (!btn) return;
+    if (!('Notification' in window)) { btn.style.display = 'none'; return; }
+    var alreadyOn = false;
+    try { alreadyOn = Notification.permission === 'granted' && localStorage.getItem('pushEnabled') === '1'; } catch (err) {}
+    if (alreadyOn) btn.textContent = '✅ 通知をオンにしました';
+  });
+})();
+`;
+
+// 専用トレーニングの並び替え(▲▼)専用: ページ全体を再読み込みせず、その場で順番を入れ替える。
+// これにより、並び替えのたびにスクロール位置が上に戻ってしまう問題を根本的に避けられる。
+// 押した瞬間に画面上の順番を入れ替え、サーバーへの保存は裏で行う(待ち時間をなくす)。
+// 連打された場合も保存の順番が崩れないよう、保存リクエストは1件ずつ順番に送る。失敗した時だけ画面を読み込み直す
+const MEDIA_REORDER_SCRIPT = `
+(function () {
+  var CIRCLED = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
+  var saveQueue = Promise.resolve();
+  function renumber(list) {
+    var items = list.querySelectorAll('.video-item');
+    items.forEach(function (el, i) {
+      var h4 = el.querySelector('.video-item-head h4');
+      if (h4) {
+        var title = h4.textContent.replace(/^\\S+\\s/, '');
+        h4.textContent = (CIRCLED[i] || i + 1) + ' ' + title;
+      }
+      var upBtn = el.querySelector('button[title="上に移動"]');
+      var downBtn = el.querySelector('button[title="下に移動"]');
+      if (upBtn) upBtn.disabled = i === 0;
+      if (downBtn) downBtn.disabled = i === items.length - 1;
+    });
+  }
+  document.addEventListener('submit', function (e) {
+    var form = e.target;
+    if (!(form instanceof HTMLFormElement)) return;
+    var action = form.getAttribute('action') || '';
+    if (!/\\/media\\/\\d+\\/move$/.test(action)) return;
+    var item = form.closest('.video-item');
+    var dirInput = form.querySelector('input[name="direction"]');
+    var direction = dirInput ? dirInput.value : 'down';
+    if (!item) return;
+    var list = item.parentElement;
+    var sibling = direction === 'up' ? item.previousElementSibling : item.nextElementSibling;
+    if (!sibling) return;
+    e.preventDefault();
+    // ページを再読み込みしないため、共通のローディング表示(「処理中...」)をすぐ元の▲▼に戻す
+    var btn = form.querySelector('button');
+    if (btn && btn.dataset.originalText) btn.textContent = btn.dataset.originalText;
+    // 先に画面上の順番を入れ替える(ボタンの有効/無効もここで付け直す)
+    if (direction === 'up') {
+      list.insertBefore(item, sibling);
+    } else {
+      list.insertBefore(sibling, item);
+    }
+    renumber(list);
+    // サーバーへの保存は裏で順番に行う
+    saveQueue = saveQueue.then(function () {
+      return fetch(action, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'fetch' },
+        body: 'direction=' + direction,
+        credentials: 'same-origin',
+      }).then(function (res) {
+        if (!res.ok) throw new Error('failed');
+      });
+    }).catch(function () {
+      location.reload();
+    });
+  });
+})();
+`;
+
+// data-multi-confirm="3" を付けたボタンを、指定回数連続で押さないと実際には送信されないようにする
+// (誤操作で1回押しただけでは何も起きない。押すたびに文言が変わって残り回数が分かる)
+// 最後の1回では、押した上でさらに確認ダイアログも出す(二重の誤操作防止)
+const MULTI_CONFIRM_SCRIPT = `
+(function () {
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('button[data-multi-confirm]');
+    if (!btn) return;
+    var required = parseInt(btn.getAttribute('data-multi-confirm'), 10) || 1;
+    var clicks = parseInt(btn.dataset.clicks || '0', 10) + 1;
+    if (clicks < required) {
+      e.preventDefault();
+      btn.dataset.clicks = clicks;
+      if (!btn.dataset.originalText) btn.dataset.originalText = btn.textContent;
+      btn.textContent = 'あと' + (required - clicks) + '回押すと削除します';
+      return;
+    }
+    var confirmMessage = btn.getAttribute('data-multi-confirm-message') || '本当に削除しますか?この操作は元に戻せません。';
+    if (!confirm(confirmMessage)) {
+      e.preventDefault();
+    }
+  });
+})();
+`;
+
+// 会員TOPページ専用: 下に引っ張って更新するジェスチャー(プルアンドフレッシュ)
+// 「引っ張り中」かどうかはtouchstartの時点(スクロール位置が一番上)だけで判定する。
+// 途中のtouchmoveのたびにwindow.scrollYを再チェックしていると、インジケーターの高さが
+// 変わることによる端末側の微妙なスクロール位置のブレで「引っ張り中」判定が途切れてしまい、
+// 「離して更新」の表示は出るのに指を離しても更新が始まらない、という不具合につながっていた
+const PULL_TO_REFRESH_SCRIPT = `
+(function () {
+  var threshold = 70;
+  var pulling = false;
+  var startY = 0;
+  var currentPull = 0;
+  var indicator = document.createElement('div');
+  indicator.className = 'ptr-indicator';
+  indicator.textContent = '↓ 引っ張って更新';
+  document.body.insertBefore(indicator, document.body.firstChild);
+  function resetIndicator() {
+    currentPull = 0;
+    indicator.style.height = '0px';
+    indicator.style.opacity = '0';
+    indicator.textContent = '↓ 引っ張って更新';
+  }
+  document.addEventListener('touchstart', function (e) {
+    if (window.scrollY === 0) {
+      startY = e.touches[0].clientY;
+      pulling = true;
+      currentPull = 0;
+    } else {
+      // ページの途中からのタッチでは引っ張り更新を始めない。
+      // 前回のジェスチャーがtouchend/touchcancelを取りこぼして「引っ張り中」のまま
+      // 残ってしまうケースがあるため、ここで必ずリセットしておく
+      pulling = false;
+      resetIndicator();
+    }
+  }, { passive: true });
+  document.addEventListener('touchmove', function (e) {
+    if (!pulling) return;
+    var diff = e.touches[0].clientY - startY;
+    if (diff <= 0) {
+      // 指を戻した場合は見た目だけ縮めておく(引っ張り自体はtouchendまで継続扱いにする)
+      resetIndicator();
+      return;
+    }
+    currentPull = Math.min(diff, 100);
+    indicator.style.height = currentPull + 'px';
+    indicator.style.opacity = Math.min(currentPull / threshold, 1);
+    indicator.textContent = currentPull > threshold ? '↑ 離して更新' : '↓ 引っ張って更新';
+  }, { passive: true });
+  function finishPull() {
+    if (!pulling) return;
+    pulling = false;
+    if (currentPull > threshold) {
+      indicator.textContent = '更新中...';
+      indicator.style.height = '40px';
+      indicator.style.opacity = '1';
+      location.reload();
+    } else {
+      resetIndicator();
+    }
+  }
+  document.addEventListener('touchend', finishPull, { passive: true });
+  document.addEventListener('touchcancel', finishPull, { passive: true });
+})();
+`;
+
+// 通知を有効にするボタン(共通)。押すと端末の通知許可ダイアログが出る
+const PUSH_ENABLE_BUTTON = `<button type="button" id="push-enable-btn" class="btn" onclick="window.enablePushNotifications && enablePushNotifications(this)">🔔 通知を受け取る</button>`;
+
+// 管理画面の共通トップバー(更新ボタン付き)。backHrefを指定すると「← ラベル」のリンクになる
+const ADMIN_REFRESH_BTN = `<button type="button" class="btn" onclick="this.disabled=true;this.textContent='更新中...';location.reload();" title="最新の情報に更新します">🔄 更新</button>`;
+function adminTopbar(label, backHref = '') {
   return `<div class="topbar">
-    <span class="brand">
-      ${showSiteTitle ? `<span style="display:block;font-size:0.72rem;font-weight:400;opacity:0.85;line-height:1.4;">オンライン運動元気倶楽部</span>` : ''}
-      <span style="display:block;">${label}</span>
-    </span>
+    <span class="brand">${backHref ? `<a href="${backHref}">&larr; ${escapeHtml(label)}</a>` : escapeHtml(label)}</span>
     <div class="topbar-actions">
+      <a href="/guide">📖 使い方ガイド</a>
       <a href="/board">💬 みんなの掲示板</a>
-      ${showLogout ? `<form method="POST" action="/logout"><button type="submit">ログアウト</button></form>` : ''}
+      ${PUSH_ENABLE_BUTTON}
+      ${ADMIN_REFRESH_BTN}
+      <form method="POST" action="/logout" onsubmit="return confirm(&#39;ログアウトしますか？&#39;);"><button type="submit">ログアウト</button></form>
     </div>
   </div>`;
+}
+
+// ページ末尾に右寄せで置く「みんなの掲示板」へのリンク(会員側ページで使用)
+const BOARD_LINK_FOOTER = `<div class="board-link-footer"><a href="/board">💬 みんなの掲示板</a></div>`;
+
+function topbar(label, showLogout = true, showSiteTitle = false, settingsMenu = '') {
+  return `<div class="topbar">
+    <span class="brand" style="display:flex;align-items:center;gap:8px;">
+      ${
+        settingsMenu
+          ? `<details class="topbar-settings">
+              <summary title="設定">⚙️</summary>
+              <div class="topbar-settings-menu">${settingsMenu}</div>
+            </details>`
+          : ''
+      }
+      <span>
+        ${showSiteTitle ? `<span style="display:block;font-size:0.72rem;font-weight:400;opacity:0.85;line-height:1.4;">オンライン運動元気倶楽部</span>` : ''}
+        <span style="display:block;">${label}</span>
+      </span>
+    </span>
+    <div class="topbar-actions">
+      <a href="/guide">📖 使い方ガイド</a>
+      ${showLogout ? `<form method="POST" action="/logout" onsubmit="return confirm(&#39;ログアウトしますか？&#39;);"><button type="submit">ログアウト</button></form>` : ''}
+    </div>
+  </div>`;
+}
+
+// アプリのアイコンに未読件数の赤丸(バッジ)を出す/消す。Badging APIに対応した端末でのみ動く
+// (Android・パソコンのChromeなどは対応、iPhoneのホーム画面アプリは対応が不安定)
+function appBadgeScript(count) {
+  return `
+(function () {
+  if (!navigator.setAppBadge) return;
+  ${count > 0 ? `navigator.setAppBadge(${Number(count)}).catch(function () {});` : `navigator.clearAppBadge && navigator.clearAppBadge().catch(function () {});`}
+})();
+`;
+}
+
+// ガイド内の1項目(見出し+説明文)
+function guideItem(title, body) {
+  return `<div class="guide-item"><h4>${title}</h4><p>${body}</p></div>`;
+}
+
+// サイトの使い方ガイド。会員には会員向けの案内のみ、管理者には管理者向けの案内も追加で表示する
+function guidePage(userRole) {
+  const memberItems = [
+    guideItem('✅ 毎日のチェック', 'トップページの「トレーニング完了をチェック」ボタンを押すと、その日の実施が記録されます。間違えて押した時は、もう一度押すと取り消せます。'),
+    guideItem('🎥 専用トレーニング', '担当のアドバイザーが登録してくれた動画・画像・呼吸法ツールを確認しながら取り組めます。セット数や回数の目安が書かれている場合はその下に表示されます。'),
+    guideItem('📅 カレンダー・実施記録', '過去に実施した日をカレンダーで振り返れます。実施した日の記録は日付をタップすると、その日のメモを自由に書き込めます。'),
+    guideItem('🏅 バッジ(ランク)', '累計の実施日数に応じて、ビギナーからレジェンドまでバッジが増えていきます。新しいバッジを獲得するとお祝いメッセージが表示されます。'),
+    guideItem('🎁 メニュー更新特典', '月の目標回数を3ヶ月連続で達成すると、メニュー更新の特典が受けられます。進み具合はトップページで確認できます。'),
+    guideItem('📩 メッセージ', 'アドバイザーに直接メッセージを送れます。やり取りは常に一番新しいものが見える状態で開きます。過去のものは枠内を上にスクロールすると読めます。'),
+    guideItem('🏆 ランキング', '今月の実施回数の順位(上位3名)を確認できます。'),
+    guideItem('⚙️ 設定', '「設定」を開くと、会員ページに表示する名前(表示名)やログインパスワードを自分で変更できます。'),
+    guideItem('🔔 通知を受け取る', 'このページの下の方にある「🔔 通知を受け取る」を押すと、アドバイザーからメッセージが届いた時にスマホへ通知が来るようになります。iPhoneの場合は、先に「ホーム画面に追加」した上で、そのアイコンから開いた状態でボタンを押してください。'),
+    guideItem('💬 みんなの掲示板', '会員同士が自由に投稿・交流できる場所です。返信ができるのはアドバイザー(管理者)のみです。'),
+  ].join('');
+
+  const adminItems = userRole === 'admin'
+    ? [
+        guideItem('👤 会員の追加', 'ダッシュボード下部の「会員を追加」から、名前・ユーザー名・初期パスワードを入力して登録します。ユーザー名とパスワードは会員本人に伝えてください。'),
+        guideItem('🔐 管理者アカウント', 'ダッシュボード一番下の「管理者アカウント」から、スタッフ用の管理者アカウントを追加・削除できます。メッセージ通知の既読はアカウントごとに別々なので、管理者は1人1つずつ使ってください。自分のパスワードもここから変更できます。'),
+        guideItem('📋 会員詳細ページ', '会員一覧の「詳細」から個別ページに移動できます。進捗の確認、専用トレーニングの登録、メッセージのやり取りはすべてここから行います。'),
+        guideItem('🎥 専用トレーニングの登録', '会員詳細ページから動画(YouTubeリンクなど)・画像・呼吸法などのHTMLツールを追加できます。▲▼ボタンで表示順を入れ替えたり、「セット数・回数を編集」からメモ(例: 3セット×10回)を追加・修正できます。'),
+        guideItem('🎥📷 素材ライブラリ', 'よく使う動画・画像をあらかじめ登録しておける置き場です。会員ごとに毎回アップロードし直さなくても、ライブラリから選んで配布できます。'),
+        guideItem('🚫 ランキングから除外', 'スタッフのテスト用アカウントなど、ランキングに表示したくない会員は、会員詳細ページのチェックボックスで除外できます。'),
+        guideItem('🎁 特典を渡す', '目標を連続達成した会員には一覧に「特典を渡す」ボタンが表示されます。実際に特典を渡したらボタンを押して記録してください。'),
+        guideItem('🎉 ランクアップお祝いメッセージ', 'ダッシュボードの「ランクアップ時のお祝いメッセージ」から、バッジ獲得時に表示する一言メッセージをバッジごとに設定できます。'),
+        guideItem('📩 メッセージ対応', '会員から届いたメッセージに返信できます。新着があるとダッシュボード上部に通知が表示されます。'),
+        guideItem('💾 バックアップ', '1日1回自動でバックアップが保存され、直近14日分をいつでもダウンロードできます。手動ですぐに保存したい時は「今すぐダウンロード」を押してください。'),
+        guideItem('🔄 更新ボタン', '画面右上の「🔄 更新」を押すと、最新の状態に読み込み直せます。'),
+        guideItem('🔔 通知を受け取る', '画面右上の「🔔 通知を受け取る」を押すと、会員からメッセージが届いた時にスマホへ通知が来るようになります。iPhoneの場合は、先に「ホーム画面に追加」した上で、そのアイコンから開いた状態でボタンを押してください(使い方は下の「ホーム画面に追加する方法」を参照)。'),
+      ].join('')
+    : '';
+
+  return layout({
+    title: '使い方ガイド | オンライン運動元気倶楽部',
+    topbar: `<div class="topbar"><span class="brand"><a href="${userRole === 'admin' ? '/admin' : '/member'}">&larr; 戻る</a></span>${
+      userRole === 'admin' ? '<div class="topbar-actions"><a href="/board">💬 みんなの掲示板</a></div>' : ''
+    }</div>`,
+    body: `
+    <div class="card">
+      <h2>📖 使い方ガイド</h2>
+      <p style="font-size:0.9rem;color:var(--muted);margin:0;">オンライン運動元気倶楽部の基本的な使い方をまとめています。</p>
+    </div>
+
+    <div class="card">
+      <h3>🙋 会員のみなさんへ</h3>
+      ${memberItems}
+    </div>
+
+    ${userRole === 'admin' ? `<div class="card"><h3>🛠 管理者のみなさんへ</h3>${adminItems}</div>` : ''}
+
+    <div class="card">
+      <h3>📱 ホーム画面に追加する方法</h3>
+      <p style="font-size:0.9rem;color:var(--muted);margin:0 0 12px;">ホーム画面に追加しておくと、アプリのようにアイコンをタップするだけで開けるようになります。</p>
+      <div class="guide-item">
+        <h4>🍎 iPhone(Safari)の場合</h4>
+        <ol style="margin:8px 0 0;padding-left:20px;font-size:0.88rem;color:var(--text);line-height:1.8;">
+          <li>Safariでこのサイトを開く</li>
+          <li>「共有」ボタン(四角から上に矢印が出ているマーク)をタップ。画面下にある場合と、上のURL欄の右横にある場合があります</li>
+          <li>出てきたメニューを下にスクロールして「ホーム画面に追加」をタップ</li>
+          <li>右上の「追加」をタップすれば完了です</li>
+        </ol>
+      </div>
+      <div class="guide-item">
+        <h4>🤖 Androidの場合</h4>
+        <ol style="margin:8px 0 0;padding-left:20px;font-size:0.88rem;color:var(--text);line-height:1.8;">
+          <li>Chromeでこのサイトを開く</li>
+          <li>右上にある「⋮」(縦に3つ並んだ点)のメニューをタップ</li>
+          <li>「ホーム画面に追加」または「アプリをインストール」をタップ</li>
+          <li>表示された「追加」または「インストール」をタップすれば完了です</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>🔔 通知を受け取る</h3>
+      <p style="font-size:0.9rem;color:var(--muted);margin:0 0 12px;">${
+        userRole === 'admin'
+          ? '会員からメッセージが届いた時に、スマホへ通知が来るようになります。'
+          : 'アドバイザーからメッセージが届いた時に、スマホへ通知が来るようになります。'
+      }iPhoneの場合は、上の「ホーム画面に追加する方法」を先に済ませてから、そのアイコンで開いた状態で下のボタンを押してください。</p>
+      ${PUSH_ENABLE_BUTTON}
+    </div>`,
+  });
 }
 
 function loginPage(error) {
@@ -221,39 +808,62 @@ function calendarNavHtml(basePath, prevMonthKey, nextMonthKey) {
 
 // 実施した日を新しい順に一覧表示する(「何月何日にできたか」がひと目で分かるように)
 // checkinRecords: [{date, note}, ...]。editable=trueだと各行にメモの追加・編集フォームを出す(本人のみ)
-function historyListHtml(checkinRecords, { limit = 30, editable = false } = {}) {
+// 実施した日の一覧を月ごとにグループ化し、それぞれ折りたたみ表示にする(直近の月だけ開いた状態)
+function historyListHtml(checkinRecords, { editable = false } = {}) {
   if (!checkinRecords.length) {
     return '<p style="font-size:0.85rem;color:var(--muted);margin:0;">まだ記録がありません</p>';
   }
   const sortedDesc = [...checkinRecords].sort((a, b) => b.date.localeCompare(a.date));
-  const shown = sortedDesc.slice(0, limit);
-  const items = shown
-    .map((c) => {
-      const note = c.note || '';
+  const groups = [];
+  const groupByMonth = new Map();
+  sortedDesc.forEach((c) => {
+    const mKey = monthKey(c.date);
+    let group = groupByMonth.get(mKey);
+    if (!group) {
+      group = { month: mKey, records: [] };
+      groupByMonth.set(mKey, group);
+      groups.push(group);
+    }
+    group.records.push(c);
+  });
+
+  const dayItemHtml = (c) => {
+    const note = c.note || '';
+    if (editable) {
       return `
       <li>
-        <div class="history-row">
-          <span>${formatDateJa(c.date)}</span>
-          ${note ? `<div class="history-note">${escapeHtml(note)}</div>` : ''}
-          ${
-            editable
-              ? `<details class="history-note-edit">
-                  <summary>${note ? 'メモを編集' : 'メモを追加(自由記入)'}</summary>
-                  <form method="POST" action="/member/checkins/${c.date}/note" class="inline-form">
-                    <div class="form-row">
-                      <textarea name="note" rows="2" maxlength="300" placeholder="例: スクワット3セット×10回、ベンチプレス...">${escapeHtml(note)}</textarea>
-                    </div>
-                    <button class="btn" type="submit">保存</button>
-                  </form>
-                </details>`
-              : ''
-          }
-        </div>
+        <details class="history-item">
+          <summary class="history-date">
+            <span>${formatDateJa(c.date)}</span>
+            ${note ? `<span class="history-note-preview">${escapeHtml(note)}</span>` : ''}
+          </summary>
+          <form method="POST" action="/member/checkins/${c.date}/note" class="inline-form" style="margin-top:8px;">
+            <div class="form-row">
+              <textarea name="note" rows="2" maxlength="300" placeholder="例: スクワット3セット×10回、ベンチプレス...">${escapeHtml(note)}</textarea>
+            </div>
+            <button class="btn" type="submit">保存</button>
+          </form>
+        </details>
       </li>`;
-    })
+    }
+    return `
+    <li>
+      <div class="history-row">
+        <span>${formatDateJa(c.date)}</span>
+        ${note ? `<div class="history-note">${escapeHtml(note)}</div>` : ''}
+      </div>
+    </li>`;
+  };
+
+  return groups
+    .map(
+      (g, i) => `
+    <details class="lib-category-group" ${i === 0 ? 'open' : ''}>
+      <summary class="lib-category-heading">${formatMonthJa(g.month)} <span style="font-weight:400;opacity:0.85;">(${g.records.length}回)</span></summary>
+      <ul class="history-list">${g.records.map(dayItemHtml).join('')}</ul>
+    </details>`
+    )
     .join('');
-  const more = sortedDesc.length > limit ? `<p style="font-size:0.8rem;color:var(--muted);margin:8px 0 0;">他${sortedDesc.length - limit}件</p>` : '';
-  return `<ul class="history-list">${items}</ul>${more}`;
 }
 
 // 獲得ランクのログ("いつ達成したか"の一覧、新しい順)
@@ -274,16 +884,19 @@ function badgeLogHtml(badgeLog) {
 // 管理者⇔会員のメッセージスレッド
 // viewerRole: このページを見ている人の役割('admin'|'member')。自分が送信したメッセージにだけ削除ボタンを出す
 // deleteBasePath: 削除フォームの送信先のベースパス(末尾に "/{メッセージID}/delete" を付けて使う)
-function messageThreadHtml(messages, { viewerRole, deleteBasePath } = {}) {
+// pollUrl を渡すと、その件数を定期的に確認して新着があれば自動で再読み込みする
+// (プッシュ通知のpostMessageが届かない端末でも確実に更新するためのフォールバック)
+function messageThreadHtml(messages, { viewerRole, deleteBasePath, pollUrl } = {}) {
+  const pollAttrs = pollUrl ? ` data-poll-url="${escapeHtml(pollUrl)}" data-count="${messages.length}"` : '';
   if (!messages.length) {
-    return '<p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">まだメッセージはありません</p>';
+    return `<div class="msg-thread"${pollAttrs}></div><p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">まだメッセージはありません</p>`;
   }
   const items = messages
     .map(
       (m) => `
       <div class="msg-bubble ${m.senderRole === 'admin' ? 'from-admin' : 'from-member'}">
         <div class="msg-meta">
-          <span>${escapeHtml(m.senderName)} ・ ${escapeHtml(m.createdAt)}</span>
+          <span>${escapeHtml(viewerRole === 'member' && m.senderRole === 'admin' ? 'アドバイザー' : m.senderName)} ・ ${escapeHtml(m.createdAt)}</span>
           ${
             viewerRole && deleteBasePath && m.senderRole === viewerRole
               ? `<form method="POST" action="${deleteBasePath}/${m.id}/delete" style="display:inline;" onsubmit="return confirm('このメッセージを削除しますか？');">
@@ -296,7 +909,7 @@ function messageThreadHtml(messages, { viewerRole, deleteBasePath } = {}) {
       </div>`
     )
     .join('');
-  return `<div class="msg-thread">${items}</div>`;
+  return `<div class="msg-thread"${pollAttrs}>${items}</div>`;
 }
 
 function badgeRowHtml(badges) {
@@ -311,16 +924,21 @@ function badgeRowHtml(badges) {
     .join('')}</div>`;
 }
 
-function leaderboardHtml(ranked, currentUserId, limit = 3) {
+// linkToAdmin: 管理画面から呼ぶ時にtrueにすると、名前を押して会員の詳細ページに飛べるようにする
+function leaderboardHtml(ranked, currentUserId, limit = 3, linkToAdmin = false) {
   const top = ranked.slice(0, limit);
   const meInTop = top.some((r) => r.id === currentUserId);
   const me = ranked.find((r) => r.id === currentUserId);
+  const nameHtml = (r, extra = '') =>
+    linkToAdmin
+      ? `<a href="/admin/member/${r.id}" style="color:inherit;text-decoration:none;">${escapeHtml(r.name)}${extra}</a>`
+      : `${escapeHtml(r.name)}${extra}`;
   const rows = top
     .map(
       (r) => `
       <li class="rank-${r.rank} ${r.id === currentUserId ? 'me' : ''}">
         <span class="rank">${r.rank}</span>
-        <span class="name">${escapeHtml(r.name)}${r.id === currentUserId ? ' (あなた)' : ''}</span>
+        <span class="name">${nameHtml(r, r.id === currentUserId ? ' (あなた)' : '')}</span>
         <span class="count">${r.count}回</span>
       </li>`
     )
@@ -329,7 +947,7 @@ function leaderboardHtml(ranked, currentUserId, limit = 3) {
     !meInTop && me
       ? `<li class="me" style="border-top:2px dashed var(--border);margin-top:4px;">
           <span class="rank">${me.rank}</span>
-          <span class="name">${escapeHtml(me.name)} (あなた)</span>
+          <span class="name">${nameHtml(me, ' (あなた)')}</span>
           <span class="count">${me.count}回</span>
         </li>`
       : '';
@@ -383,6 +1001,44 @@ function monthlyProgressHtml({ monthCount, monthGoal, monthlyStreak, rewardMonth
     </p>`;
 }
 
+// 月間目標をrewardMonths連続で達成すると「メニュー更新」の対象になる、という進捗をスタンプカード風に見せる
+// (達成した月にはハンコ(✓)が押され、間の線もつながって進み具合がひと目で分かる)
+// showMessage: 会員向けの語りかけ文言(「あと◯ヶ月で...」等)を表示するか。
+// 管理画面ではスタンプ(進捗)だけ見せたいのでfalseにする
+function menuUpdateCardHtml({ monthlyStreak, rewardMonths, showMessage = true }) {
+  const cyclePos = monthlyStreak % rewardMonths;
+  const completed = cyclePos === 0 && monthlyStreak > 0 ? rewardMonths : cyclePos;
+  const remaining = rewardMonths - completed;
+
+  const circleParts = [];
+  const labelParts = [];
+  for (let i = 0; i < rewardMonths; i++) {
+    const filled = i < completed;
+    circleParts.push(`<div class="stampA ${filled ? 'filled' : ''}">${filled ? '✓' : i + 1}</div>`);
+    labelParts.push(`<div class="stampA-label ${filled ? 'done' : ''}">${i + 1}ヶ月目</div>`);
+    if (i < rewardMonths - 1) {
+      const lineFilled = i + 1 < completed;
+      circleParts.push(`<div class="stampA-line ${lineFilled ? 'filled' : ''}"></div>`);
+      labelParts.push('<div class="stampA-spacer"></div>');
+    }
+  }
+
+  const achieved = completed >= rewardMonths;
+  const message = achieved
+    ? `🎉 ${rewardMonths}ヶ月連続で目標を達成しました!メニュー更新のチャンスです。アドバイザーにご相談ください。`
+    : `あと${remaining}ヶ月連続で目標を達成すると、メニュー更新のチャンスです!`;
+
+  return `
+    <div class="stampA-row">${circleParts.join('')}</div>
+    <div class="stampA-labels">${labelParts.join('')}</div>${
+      showMessage
+        ? `
+    <p class="stamp-msg ${achieved ? 'celebrate' : ''}">${message}</p>
+    <p style="font-size:0.8rem;color:var(--muted);margin:8px 0 0;">月${MONTHLY_GOAL}回の実施を${rewardMonths}ヶ月連続で達成すると、メニュー更新1回の対象になります。以降も継続すれば${rewardMonths}ヶ月ごとに繰り返し対象になります。</p>`
+        : ''
+    }`;
+}
+
 function memberPage({
   userName,
   today,
@@ -413,9 +1069,19 @@ function memberPage({
   messages,
   media,
   hasUnreadMessages,
+  hasPushSubscription = false,
+  rankUpMessages = {},
 }) {
   const script = `
     ${celebrate ? confettiScript(rewardCelebrate) : ''}`;
+
+  // ランクアップ時のメッセージ: 基本の文言は固定、バッジごとに管理画面で入力した一言があれば下に追加表示する
+  const rankUpMessageTemplate = milestoneBadge ? rankUpMessages[milestoneBadge.days] || '' : '';
+  const milestoneMessageHtml = milestoneBadge
+    ? `${milestoneBadge.icon} バッジ「${escapeHtml(milestoneBadge.label)}」を獲得しました!<div class="sub">累計${milestoneBadge.days}日達成です、この調子!${
+        rankUpMessageTemplate ? `<br>${escapeHtml(rankUpMessageTemplate)}` : ''
+      }</div>`
+    : '';
 
   const celebrateBanner = celebrate
     ? `<div class="celebrate-banner ${rewardCelebrate ? 'reward' : ''}">
@@ -423,7 +1089,7 @@ function memberPage({
           rewardCelebrate
             ? `🎁 特典ゲット!<div class="sub">月${MONTHLY_GOAL}回を${REWARD_MONTHS}ヶ月連続で達成しました。管理者に伝えて特典を受け取ってください!</div>`
             : milestoneBadge
-            ? `${milestoneBadge.icon} バッジ「${escapeHtml(milestoneBadge.label)}」を獲得しました!<div class="sub">累計${milestoneBadge.days}日達成です、この調子!</div>`
+            ? milestoneMessageHtml
             : `🎉 今日もチェック完了!<div class="sub">連続${streak}日目、いい調子です</div>`
         }
       </div>`
@@ -433,13 +1099,26 @@ function memberPage({
     ? `<a href="#messages" class="notice-banner">📩 アドバイザーから新着メッセージがあります</a>`
     : '';
 
+  // まだ通知(プッシュ通知)をONにしていない会員には、目立つ場所で案内する
+  // (使い方ガイドの奥にボタンがあるだけだと気づかれにくいため)
+  const pushPromptBanner = !hasPushSubscription
+    ? `<div class="card" style="background:#eaf2fd;border-color:var(--primary-light);">
+        <h3 style="margin:0 0 6px;">🔔 通知をONにしませんか？</h3>
+        <p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">アドバイザーからメッセージが届いた時に、スマホへすぐお知らせが届くようになります。iPhoneの場合は、先に「ホーム画面に追加」してから下のボタンを押してください。</p>
+        ${PUSH_ENABLE_BUTTON}
+      </div>`
+    : '';
+
   return layout({
     title: 'マイページ | オンライン運動元気倶楽部',
-    topbar: topbar(`${escapeHtml(userName)} さん`, true, true),
+    topbar: topbar(`${escapeHtml(userName)} さん`, false, true),
     script,
+    // このページを開いた時点で未読メッセージは既読になっているので、バッジは必ず消す
+    extraScript: PULL_TO_REFRESH_SCRIPT + appBadgeScript(0),
     body: `
     ${unreadBanner}
     ${celebrateBanner}
+    ${pushPromptBanner}
 
     <div class="card" id="video">
       <h3>${escapeHtml(userName)}さんの専用トレーニング</h3>
@@ -452,6 +1131,10 @@ function memberPage({
       <p style="font-size:0.85rem;color:var(--muted);margin:10px 0 0;">
         ${nextBadge ? `次のバッジ「${nextBadge.icon} ${escapeHtml(nextBadge.label)}」まであと累計${nextBadge.days - totalDays}日` : 'すべてのバッジを獲得しました!すごい継続力です 👑'}
       </p>
+      <details class="lib-category-group" style="margin-top:14px;">
+        <summary class="lib-category-heading">🎖 ランクアップ履歴</summary>
+        ${badgeLogHtml(badgeLog)}
+      </details>
     </div>
 
     <div class="card">
@@ -464,8 +1147,13 @@ function memberPage({
     </div>
 
     <div class="card">
-      <h3>今月の目標(月${monthGoal}回 × 3ヶ月継続で特典)</h3>
+      <h3>今月の目標🏋️(月${monthGoal}回)</h3>
       ${monthlyProgressHtml({ monthCount, monthGoal, monthlyStreak, rewardMonths })}
+    </div>
+
+    <div class="card">
+      <h3>メニュー更新特典🎁</h3>
+      ${menuUpdateCardHtml({ monthlyStreak, rewardMonths })}
     </div>
 
     <div class="card">
@@ -480,13 +1168,20 @@ function memberPage({
 
     <div class="card" id="history">
       <h3>実施した日</h3>
-      <p style="font-size:0.8rem;color:var(--muted);margin:0 0 8px;">日付をタップすると、セット数・回数などのメモを追加・編集できます</p>
+      <p style="font-size:0.8rem;color:var(--muted);margin:0 0 8px;">日付をタップするとメモを自由に追加、編集できます</p>
       ${historyListHtml(checkinRecords, { editable: true })}
     </div>
 
-    <div class="card">
-      <h3>🎖 ランクアップ履歴</h3>
-      ${badgeLogHtml(badgeLog)}
+    <div class="card" id="messages">
+      <h3>📩 アドバイザーとのメッセージ</h3>
+      ${messageThreadHtml(messages, { viewerRole: 'member', deleteBasePath: '/member/messages', pollUrl: '/member/messages/count' })}
+      <form method="POST" action="/member/messages" class="inline-form">
+        <div class="form-row">
+          <label>アドバイザーにメッセージを送る</label>
+          <textarea name="body" maxlength="500" rows="2" required></textarea>
+        </div>
+        <button class="btn primary" type="submit">送信</button>
+      </form>
     </div>
 
     <div class="card">
@@ -494,20 +1189,24 @@ function memberPage({
       ${leaderboardHtml(ranked, userId)}
     </div>
 
-    <div class="card" id="messages">
-      <h3>📩 アドバイザーとのメッセージ</h3>
-      ${messageThreadHtml(messages, { viewerRole: 'member', deleteBasePath: '/member/messages' })}
-      <form method="POST" action="/member/messages" class="inline-form">
-        <div class="form-row">
-          <label>アドバイザーにメッセージを送る</label>
-          <input type="text" name="body" maxlength="500" required>
-        </div>
-        <button class="btn primary" type="submit">送信</button>
-      </form>
-    </div>
-
     <div class="card">
-      <a class="btn" href="/member/password">🔑 パスワード変更</a>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+        <details class="settings-collapse">
+          <summary class="btn">設定</summary>
+          <div class="settings-collapse-menu">
+            <form method="POST" action="/member/display-name" class="inline-form" style="margin:0;">
+              <div class="form-row">
+                <label>表示名</label>
+                <input type="text" name="displayName" maxlength="20" value="${escapeHtml(userName)}" required>
+              </div>
+              <button class="btn" type="submit">表示名を保存</button>
+            </form>
+            <a class="btn" href="/member/password">パスワード変更</a>
+            <form method="POST" action="/logout" onsubmit="return confirm(&#39;ログアウトしますか？&#39;);"><button class="btn" type="submit">ログアウト</button></form>
+          </div>
+        </details>
+        <a href="/board" style="font-size:1rem;color:var(--primary);text-decoration:none;white-space:nowrap;">💬 みんなの掲示板</a>
+      </div>
     </div>`,
   });
 }
@@ -515,7 +1214,7 @@ function memberPage({
 function memberPasswordPage({ userName, error, message }) {
   return layout({
     title: 'パスワード変更 | オンライン運動元気倶楽部',
-    topbar: `<div class="topbar"><span class="brand"><a href="/member">&larr; 戻る</a></span><div class="topbar-actions"><a href="/board">💬 みんなの掲示板</a><form method="POST" action="/logout"><button type="submit">ログアウト</button></form></div></div>`,
+    topbar: `<div class="topbar"><span class="brand"><a href="/member">&larr; 戻る</a></span><div class="topbar-actions"><a href="/guide">📖 使い方ガイド</a><form method="POST" action="/logout" onsubmit="return confirm(&#39;ログアウトしますか？&#39;);"><button type="submit">ログアウト</button></form></div></div>`,
     body: `
     ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
     <div class="card">
@@ -528,22 +1227,37 @@ function memberPasswordPage({ userName, error, message }) {
         </div>
         <button class="btn primary" type="submit">変更する</button>
       </form>
-    </div>`,
+    </div>
+    ${BOARD_LINK_FOOTER}`,
   });
 }
 
-function adminPage({ members, teamWeekly, ranked, error, message, unreadMembers = [] }) {
+function adminPage({ members, ranked, error, message, unreadMembers = [], rankUpMessages = {}, backups = [], pushEnabledMemberIds = new Set(), admins = [], currentUserId = null }) {
+  // 会員一覧の名前の横にも、新着メッセージがある会員には📩マークを出す(上のバナーだけだと見落としやすいため)
+  const unreadMemberIds = new Set(unreadMembers.map((m) => m.id));
+  const membersWithoutPush = members.filter((m) => !pushEnabledMemberIds.has(m.id));
   const rows = members
     .map(
       (m) => `
     <tr>
-      <td>${m.badgeIcon ? `<span title="${escapeHtml(m.badgeLabel)}">${m.badgeIcon}</span> ` : ''}<a href="/admin/member/${m.id}">${escapeHtml(m.name)}</a></td>
+      <td>${m.badgeIcon ? `<span title="${escapeHtml(m.badgeLabel)}">${m.badgeIcon}</span> ` : ''}<a href="/admin/member/${m.id}">${escapeHtml(m.name)}</a>${
+        unreadMemberIds.has(m.id)
+          ? ` <a href="/admin/member/${m.id}#messages" title="新着メッセージがあります" style="text-decoration:none;">📩</a>`
+          : ''
+      }</td>
       <td><span class="badge ${m.weekCount >= 3 ? 'good' : 'warn'}">${m.weekCount}/7</span></td>
       <td><span class="badge ${m.monthCount >= m.monthGoal ? 'good' : 'warn'}">${m.monthCount}/${m.monthGoal}</span></td>
       <td>${m.monthlyStreak}ヶ月</td>
       <td>${m.streak}日</td>
       <td>${m.total}回</td>
       <td>${m.lastDate || '未実施'}</td>
+      <td>
+        ${
+          pushEnabledMemberIds.has(m.id)
+            ? '<span class="badge good">🔔 ON</span>'
+            : '<span class="badge warn">🔕 未設定</span>'
+        }
+      </td>
       <td>
         ${
           m.rewardsPending > 0
@@ -554,30 +1268,14 @@ function adminPage({ members, teamWeekly, ranked, error, message, unreadMembers 
         }
       </td>
       <td><a class="btn" href="/admin/member/${m.id}">詳細</a></td>
-      <td>
-        <form method="POST" action="/admin/members/${m.id}/delete" onsubmit="return confirm('${escapeHtml(m.name)}さんを削除しますか?');">
-          <button class="btn danger" type="submit">削除</button>
-        </form>
-      </td>
     </tr>`
     )
     .join('');
 
-  const script = `
-    const teamWeekly = ${JSON.stringify(teamWeekly)};
-    new Chart(document.getElementById('teamChart'), {
-      type: 'line',
-      data: {
-        labels: teamWeekly.map(w => w.weekStart),
-        datasets: [{ label: '会員1人あたり週平均実施回数', data: teamWeekly.map(w => w.avg), borderColor: '#1d4ed8', backgroundColor: 'rgba(29,78,216,0.15)', fill: true, tension: 0.3 }]
-      },
-      options: { scales: { y: { beginAtZero: true, max: 7 } } }
-    });`;
-
   return layout({
     title: '管理者ダッシュボード | オンライン運動元気倶楽部',
-    topbar: topbar('管理者ダッシュボード'),
-    script,
+    topbar: adminTopbar('管理者ダッシュボード'),
+    extraScript: appBadgeScript(unreadMembers.length),
     body: `
     ${
       unreadMembers.length
@@ -590,33 +1288,6 @@ function adminPage({ members, teamWeekly, ranked, error, message, unreadMembers 
     ${message ? `<div class="message">${escapeHtml(message)}</div>` : ''}
 
     <div class="card">
-      <a class="btn" href="/admin/library">🎥📷 素材ライブラリを管理</a>
-    </div>
-
-    <div class="card">
-      <h3>🏆 今月のランキング</h3>
-      ${ranked.length ? leaderboardHtml(ranked, null, 3) : '<p style="font-size:0.85rem;color:var(--muted);margin:0;">まだデータがありません</p>'}
-    </div>
-
-    <div class="card">
-      <h2>会員の進捗</h2>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>名前</th><th>今週</th><th>今月</th><th>目標達成月数</th><th>連続日数</th><th>累計</th><th>最終実施日</th><th>特典</th><th></th><th></th></tr></thead>
-          <tbody>
-            ${rows || `<tr><td colspan="10">まだ会員が登録されていません</td></tr>`}
-          </tbody>
-        </table>
-      </div>
-      <p style="font-size:0.8rem;color:var(--muted);margin-top:8px;">特典ルール: 月${MONTHLY_GOAL}回の実施を${REWARD_MONTHS}ヶ月連続で達成すると特典1回。以降も継続すれば${REWARD_MONTHS}ヶ月ごとに繰り返し獲得できます。</p>
-    </div>
-
-    <div class="card">
-      <h3>チーム全体の週次平均実施回数</h3>
-      <canvas id="teamChart" height="110"></canvas>
-    </div>
-
-    <div class="card">
       <h3>会員を追加</h3>
       <form method="POST" action="/admin/members" class="inline-form">
         <div class="form-row"><label>名前</label><input type="text" name="name" required></div>
@@ -627,23 +1298,136 @@ function adminPage({ members, teamWeekly, ranked, error, message, unreadMembers 
     </div>
 
     <div class="card">
-      <h3>データのバックアップ / 復元</h3>
+      <h3>🏆 今月のランキング</h3>
+      ${ranked.length ? leaderboardHtml(ranked, null, ranked.length, true) : '<p style="font-size:0.85rem;color:var(--muted);margin:0;">まだデータがありません</p>'}
+    </div>
+
+    ${
+      membersWithoutPush.length
+        ? `<div class="card">
+            <h3>🔕 通知が未設定の会員</h3>
+            <p style="font-size:0.85rem;color:var(--muted);margin:0 0 10px;">下の会員はまだ通知(プッシュ通知)をONにしていません。通知はご本人のスマホでしか設定できないため、会った時や連絡のついでに「使い方ガイドの🔔ボタン」を押すよう案内してあげてください。</p>
+            <p style="margin:0;">${membersWithoutPush
+              .map((m) => `<a href="/admin/member/${m.id}" style="display:inline-block;margin:0 10px 6px 0;">${escapeHtml(m.name)}さん</a>`)
+              .join('')}</p>
+          </div>`
+        : ''
+    }
+
+    <div class="card">
+      <h2>会員の進捗</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>名前</th><th>今週</th><th>今月</th><th>目標達成月数</th><th>連続日数</th><th>累計</th><th>最終実施日</th><th>通知</th><th>特典</th><th></th></tr></thead>
+          <tbody>
+            ${rows || `<tr><td colspan="10">まだ会員が登録されていません</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+      <p style="font-size:0.8rem;color:var(--muted);margin-top:8px;">特典ルール: 月${MONTHLY_GOAL}回の実施を${REWARD_MONTHS}ヶ月連続で達成すると特典1回。以降も継続すれば${REWARD_MONTHS}ヶ月ごとに繰り返し獲得できます。</p>
+    </div>
+
+    <div class="card">
+      <a class="btn" href="/admin/library">🎥📷 素材ライブラリを管理</a>
+    </div>
+
+    <div class="card">
+      <h3>🎉 ランクアップ時のお祝いメッセージ</h3>
       <p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">
-        無料ホスティングではデータが消えることがあるため、時々バックアップのダウンロードをおすすめします。
+        会員がバッジ(ランク)を新しく獲得した時のお祝い画面に、バッジごとに一言メッセージを追加できます。ここに入力した言葉がそのまま追加で表示されます(空欄ならそのバッジには追加なし)。
       </p>
-      <a class="btn" href="/admin/backup" style="margin-bottom:16px;display:inline-block;">⬇ バックアップをダウンロード</a>
-      <form method="POST" action="/admin/restore" enctype="multipart/form-data" class="inline-form" onsubmit="return confirm('現在のデータをバックアップファイルの内容で上書きします。よろしいですか?');">
+      <form method="POST" action="/admin/settings/rank-up-message" class="inline-form">
+        ${STREAK_BADGES.map(
+          (b) => `
         <div class="form-row">
-          <label>バックアップファイル(.json)から復元</label>
-          <input type="file" name="backupFile" accept=".json" required>
-        </div>
-        <button class="btn danger" type="submit">復元する</button>
+          <label>${b.icon} ${escapeHtml(b.label)}(${b.days}日)</label>
+          <input type="text" name="rankUpMessage_${b.days}" maxlength="100" value="${escapeHtml(rankUpMessages[b.days] || '')}" placeholder="例: よく頑張りました!この調子で続けましょう">
+        </div>`
+        ).join('')}
+        <button class="btn primary" type="submit">保存</button>
       </form>
-    </div>`,
+    </div>
+
+    <div class="card">
+      <h3>データのバックアップ</h3>
+      <p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">
+        1日1回、自動でバックアップが保存されます(直近14日分)。ダウンロードは手動でいつでもできます。
+      </p>
+      <a class="btn" href="/admin/backup" style="display:inline-block;margin-bottom:14px;">⬇ 今すぐダウンロード</a>
+      ${
+        backups.length
+          ? `<div class="table-wrap">
+              <table>
+                <thead><tr><th>日付</th><th></th></tr></thead>
+                <tbody>
+                  ${backups
+                    .map(
+                      (b) => `
+                  <tr>
+                    <td>${formatDateJa(b.date)}</td>
+                    <td><a class="btn" href="/admin/backups/${b.id}">⬇ ダウンロード</a></td>
+                  </tr>`
+                    )
+                    .join('')}
+                </tbody>
+              </table>
+            </div>`
+          : `<p style="font-size:0.85rem;color:var(--muted);margin:0;">自動バックアップはまだありません(アクセスすると当日分が作成されます)</p>`
+      }
+    </div>
+
+    ${adminAccountsCardHtml(admins, currentUserId)}`,
   });
 }
 
-function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGrid, prevMonthKey, nextMonthKey, calendarBasePath, weekly, monthCount, monthlyStreak, monthlySeries, rewardsEarned, rewardsGiven, rewardsPending, badges, checkinDates, checkinRecords, badgeLog, messages, media, library, videoError, hadUnreadMessages }) {
+// 管理者アカウントの一覧・追加・削除と、自分のパスワード変更(管理者ダッシュボードの一番下)
+// 通知の既読はアカウントごとに管理しているので、管理者は1人1アカウントずつ使ってもらう
+function adminAccountsCardHtml(admins, currentUserId) {
+  const rows = admins
+    .map((a) => {
+      const isMe = a.id === currentUserId;
+      const action = isMe
+        ? '<span class="badge good">ログイン中のあなた</span>'
+        : admins.length > 1
+        ? `<form method="POST" action="/admin/admins/${a.id}/delete" onsubmit="return confirm(&#39;管理者「${escapeHtml(a.name)}」を削除しますか？この人は管理画面にログインできなくなります。&#39;);" style="margin:0;"><button class="btn danger" type="submit">削除</button></form>`
+        : '';
+      return `<tr><td>${escapeHtml(a.name)}</td><td>${escapeHtml(a.username)}</td><td>${action}</td></tr>`;
+    })
+    .join('');
+  return `
+    <div class="card" id="admins">
+      <h3>👤 管理者アカウント</h3>
+      <p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">
+        管理画面にログインできるアカウントです。メッセージ通知の既読はアカウントごとに別々なので、管理者は1人1つずつアカウントを使ってください。
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>名前</th><th>ユーザー名</th><th></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <details style="margin-top:14px;">
+        <summary style="cursor:pointer;color:var(--primary);font-weight:600;">＋ 管理者を追加</summary>
+        <form method="POST" action="/admin/admins" class="inline-form" style="margin-top:10px;">
+          <div class="form-row"><label>名前</label><input type="text" name="name" required maxlength="40" placeholder="例: 山田 花子"></div>
+          <div class="form-row"><label>ユーザー名(ログイン用)</label><input type="text" name="username" required maxlength="40" autocomplete="off"></div>
+          <div class="form-row"><label>初期パスワード(4文字以上)</label><input type="text" name="password" required minlength="4" autocomplete="off"></div>
+          <button class="btn primary" type="submit">管理者を追加</button>
+        </form>
+        <p style="font-size:0.8rem;color:var(--muted);margin:8px 0 0;">追加した人には、ユーザー名と初期パスワードを伝えてください。ログイン後、下の「自分のパスワードを変更」から変えてもらえます。</p>
+      </details>
+      <details style="margin-top:12px;">
+        <summary style="cursor:pointer;color:var(--primary);font-weight:600;">🔑 自分のパスワードを変更</summary>
+        <form method="POST" action="/admin/password" class="inline-form" style="margin-top:10px;">
+          <div class="form-row"><label>現在のパスワード</label><input type="password" name="currentPassword" required autocomplete="current-password"></div>
+          <div class="form-row"><label>新しいパスワード(4文字以上)</label><input type="password" name="newPassword" required minlength="4" autocomplete="new-password"></div>
+          <button class="btn primary" type="submit">変更する</button>
+        </form>
+      </details>
+    </div>`;
+}
+
+function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGrid, prevMonthKey, nextMonthKey, calendarBasePath, weekly, monthCount, monthlyStreak, monthlySeries, rewardsEarned, rewardsGiven, rewardsPending, badges, checkinDates, checkinRecords, badgeLog, messages, media, library, categories, videoError, hadUnreadMessages }) {
   const script = `
     const monthlySeries = ${JSON.stringify(monthlySeries)};
     new Chart(document.getElementById('monthlyChart'), {
@@ -661,8 +1445,9 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
 
   return layout({
     title: `${escapeHtml(member.name)} の詳細 | オンライン運動元気倶楽部`,
-    topbar: `<div class="topbar"><span class="brand"><a href="/admin">&larr; 管理者ダッシュボード</a></span><div class="topbar-actions"><a href="/board">💬 みんなの掲示板</a><form method="POST" action="/logout"><button type="submit">ログアウト</button></form></div></div>`,
+    topbar: adminTopbar('管理者ダッシュボード', '/admin'),
     script,
+    extraScript: MEDIA_REORDER_SCRIPT + MULTI_CONFIRM_SCRIPT,
     body: `
     ${hadUnreadMessages ? `<a href="#messages" class="notice-banner">📩 ${escapeHtml(member.name)}さんから新着メッセージがあります</a>` : ''}
     <div class="card">
@@ -673,8 +1458,48 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
         <div class="stat-box"><div class="num">${total}</div><div class="label">累計実施回数</div></div>
       </div>
       <h3>${formatMonthJa(monthKeyForGrid)}のカレンダー</h3>
-      ${calendarNavHtml(calendarBasePath, prevMonthKey, nextMonthKey)}
-      ${gridHtml(grid)}
+      <div class="calendar-compact">
+        ${calendarNavHtml(calendarBasePath, prevMonthKey, nextMonthKey)}
+        ${gridHtml(grid)}
+      </div>
+      <form method="POST" action="/admin/members/${member.id}/exclude-ranking" style="margin-top:14px;" onchange="this.requestSubmit()">
+        <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem;color:var(--muted);cursor:pointer;">
+          <input type="checkbox" name="excluded" value="1" ${member.excludeFromRanking ? 'checked' : ''}>
+          ランキングに表示しない(スタッフのテスト用アカウントなど)
+        </label>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3>実施した日</h3>
+      ${historyListHtml(checkinRecords)}
+    </div>
+
+    <div class="card">
+      <h3>月間目標(月${MONTHLY_GOAL}回 × ${REWARD_MONTHS}ヶ月継続で特典)</h3>
+      <div class="stat-row">
+        <div class="stat-box"><div class="num">${monthCount}/${MONTHLY_GOAL}</div><div class="label">今月</div></div>
+        <div class="stat-box"><div class="num">${monthlyStreak}ヶ月</div><div class="label">目標達成 連続月数</div></div>
+        <div class="stat-box"><div class="num">${rewardsGiven}/${rewardsEarned}</div><div class="label">特典 渡し済み/獲得済み</div></div>
+      </div>
+      ${menuUpdateCardHtml({ monthlyStreak, rewardMonths: REWARD_MONTHS, showMessage: false })}
+      <canvas id="monthlyChart" height="110"></canvas>
+      ${
+        rewardsPending > 0
+          ? `<form method="POST" action="/admin/members/${member.id}/reward" onsubmit="return confirm('${escapeHtml(member.name)}さんに特典を渡しましたか?');" style="margin-top:12px;">
+              <button class="btn primary" type="submit">🎁 特典を渡す(残${rewardsPending})</button>
+             </form>`
+          : `<p style="font-size:0.85rem;color:var(--muted);margin-top:12px;">現在、未受け渡しの特典はありません。</p>`
+      }
+    </div>
+
+    <div class="card">
+      <h3>バッジコレクション</h3>
+      ${badgeRowHtml(badges)}
+      <details class="lib-category-group" style="margin-top:14px;">
+        <summary class="lib-category-heading">🎖 ランクアップ履歴</summary>
+        ${badgeLogHtml(badgeLog)}
+      </details>
     </div>
 
     <div class="card" id="video">
@@ -685,7 +1510,7 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
         (media || []).length < MAX_MEMBER_MEDIA
           ? `<details style="margin-top:12px;">
               <summary style="cursor:pointer;color:var(--primary);font-size:0.9rem;">📚 ライブラリから選んで追加</summary>
-              <div style="margin-top:10px;">${libraryListHtml(library, { mode: 'pick', memberId: member.id })}</div>
+              <div style="margin-top:10px;">${libraryListHtml(library, { mode: 'pick', memberId: member.id, categories })}</div>
             </details>
             <form method="POST" action="/admin/members/${member.id}/media/video" class="inline-form" style="margin-top:16px;">
               <div class="form-row">
@@ -698,7 +1523,7 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
               </div>
               <div class="form-row">
                 <label>セット数・回数(任意)</label>
-                <input type="text" name="note" maxlength="200" placeholder="例: 3セット×10回">
+                <input type="text" name="note" maxlength="200" ${NO_ENTER_SUBMIT} placeholder="例: 3セット×10回">
               </div>
               <button class="btn primary" type="submit">動画を追加</button>
             </form>
@@ -713,56 +1538,39 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
               </div>
               <div class="form-row">
                 <label>セット数・回数(任意)</label>
-                <input type="text" name="note" maxlength="200" placeholder="例: 3セット×10回">
+                <input type="text" name="note" maxlength="200" ${NO_ENTER_SUBMIT} placeholder="例: 3セット×10回">
               </div>
               <button class="btn primary" type="submit">画像を追加</button>
+            </form>
+            <form method="POST" action="/admin/members/${member.id}/media/html" enctype="multipart/form-data" class="inline-form" style="margin-top:12px;">
+              <div class="form-row">
+                <label>HTMLツール タイトル</label>
+                <input type="text" name="title" maxlength="60" required placeholder="例: 呼吸法トレーニング">
+              </div>
+              <div class="form-row">
+                <label>HTMLファイル(.html、500KBまで)</label>
+                <input type="file" name="htmlFile" accept=".html,.htm" required>
+              </div>
+              <div class="form-row">
+                <label>セット数・回数(任意)</label>
+                <input type="text" name="note" maxlength="200" ${NO_ENTER_SUBMIT} placeholder="例: 1日3回">
+              </div>
+              <button class="btn primary" type="submit">HTMLツールを追加</button>
             </form>`
           : `<p style="font-size:0.85rem;color:var(--muted);margin-top:12px;">上限の${MAX_MEMBER_MEDIA}件に達しています。追加するには先に削除してください。</p>`
       }
     </div>
 
-    <div class="card">
-      <h3>実施した日</h3>
-      ${historyListHtml(checkinRecords)}
-    </div>
-
-    <div class="card">
-      <h3>バッジコレクション</h3>
-      ${badgeRowHtml(badges)}
-    </div>
-
-    <div class="card">
-      <h3>🎖 ランクアップ履歴</h3>
-      ${badgeLogHtml(badgeLog)}
-    </div>
-
     <div class="card" id="messages">
       <h3>📩 ${escapeHtml(member.name)} さんとのメッセージ</h3>
-      ${messageThreadHtml(messages, { viewerRole: 'admin', deleteBasePath: `/admin/members/${member.id}/messages` })}
+      ${messageThreadHtml(messages, { viewerRole: 'admin', deleteBasePath: `/admin/members/${member.id}/messages`, pollUrl: `/admin/members/${member.id}/messages/count` })}
       <form method="POST" action="/admin/members/${member.id}/messages" class="inline-form">
         <div class="form-row">
           <label>メッセージを送る</label>
-          <input type="text" name="body" maxlength="500" required>
+          <textarea name="body" maxlength="500" rows="2" required></textarea>
         </div>
         <button class="btn primary" type="submit">送信</button>
       </form>
-    </div>
-
-    <div class="card">
-      <h3>月間目標(月${MONTHLY_GOAL}回 × ${REWARD_MONTHS}ヶ月継続で特典)</h3>
-      <div class="stat-row">
-        <div class="stat-box"><div class="num">${monthCount}/${MONTHLY_GOAL}</div><div class="label">今月</div></div>
-        <div class="stat-box"><div class="num">${monthlyStreak}ヶ月</div><div class="label">目標達成 連続月数</div></div>
-        <div class="stat-box"><div class="num">${rewardsGiven}/${rewardsEarned}</div><div class="label">特典 渡し済み/獲得済み</div></div>
-      </div>
-      <canvas id="monthlyChart" height="110"></canvas>
-      ${
-        rewardsPending > 0
-          ? `<form method="POST" action="/admin/members/${member.id}/reward" onsubmit="return confirm('${escapeHtml(member.name)}さんに特典を渡しましたか?');" style="margin-top:12px;">
-              <button class="btn primary" type="submit">🎁 特典を渡す(残${rewardsPending})</button>
-             </form>`
-          : `<p style="font-size:0.85rem;color:var(--muted);margin-top:12px;">現在、未受け渡しの特典はありません。</p>`
-      }
     </div>
 
     <div class="card">
@@ -774,21 +1582,76 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
         </div>
         <button class="btn" type="submit">再設定</button>
       </form>
+    </div>
+
+    <div class="card" style="border-color:var(--danger);">
+      <h3 style="color:var(--danger);">⚠️ 会員を削除</h3>
+      <p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">
+        削除すると、この会員の記録・メッセージ・専用トレーニングもすべて消え、元に戻せません。会員一覧の画面からは押せないよう、この詳細ページの中だけに移しています。ボタンを3回連続で押すと、最後に確認画面が出て削除されます(誤操作防止)。
+      </p>
+      <form method="POST" action="/admin/members/${member.id}/delete">
+        <button class="btn danger" type="submit" data-multi-confirm="3" data-multi-confirm-message="${escapeHtml(member.name)}さんを削除しますか?この操作は元に戻せません。">${escapeHtml(member.name)}さんを削除する</button>
+      </form>
     </div>`,
   });
 }
 
 // 素材ライブラリ管理画面(会員に配る前の動画・画像をここにまとめて登録しておく)
-function adminLibraryPage({ library, error }) {
+// カテゴリーの追加・名前変更・削除を行う管理カード(「その他」は既定カテゴリーとして変更・削除不可)
+function categoryManageCardHtml(categories) {
+  const rows = categories
+    .map(
+      (c) => `
+      <div class="lib-category-manage-row">
+        <span class="lib-category-manage-name">${escapeHtml(c)}</span>
+        ${
+          c === DEFAULT_LIBRARY_CATEGORY
+            ? '<span class="lib-category-manage-fixed">既定・変更不可</span>'
+            : `<details class="history-note-edit">
+                <summary>名前を変更</summary>
+                <form method="POST" action="/admin/library/categories/rename" class="inline-form">
+                  <input type="hidden" name="oldName" value="${escapeHtml(c)}">
+                  <div class="form-row"><input type="text" name="newName" maxlength="20" value="${escapeHtml(c)}" required></div>
+                  <button class="btn" type="submit">変更</button>
+                </form>
+              </details>
+              <form method="POST" action="/admin/library/categories/delete" onsubmit="return confirm('「${escapeHtml(c)}」を削除しますか?このカテゴリーの素材は「その他」に移動します。');">
+                <input type="hidden" name="name" value="${escapeHtml(c)}">
+                <button class="btn danger" type="submit">削除</button>
+              </form>`
+        }
+      </div>`
+    )
+    .join('');
+  const addForm =
+    categories.length < MAX_LIBRARY_CATEGORIES
+      ? `<form method="POST" action="/admin/library/categories/add" class="inline-form" style="margin-top:12px;">
+          <div class="form-row">
+            <label>新しいカテゴリー名</label>
+            <input type="text" name="name" maxlength="20" required placeholder="例: 有酸素">
+          </div>
+          <button class="btn primary" type="submit">追加</button>
+        </form>`
+      : `<p style="font-size:0.85rem;color:var(--muted);margin-top:12px;">カテゴリーは最大${MAX_LIBRARY_CATEGORIES}件までです。</p>`;
+  return `<div class="lib-category-manage-list">${rows}</div>${addForm}`;
+}
+
+function adminLibraryPage({ library, categories = [], error }) {
   return layout({
     title: '素材ライブラリ | オンライン運動元気倶楽部',
-    topbar: `<div class="topbar"><span class="brand"><a href="/admin">&larr; 管理者ダッシュボード</a></span><div class="topbar-actions"><a href="/board">💬 みんなの掲示板</a><form method="POST" action="/logout"><button type="submit">ログアウト</button></form></div></div>`,
+    topbar: adminTopbar('管理者ダッシュボード', '/admin'),
     body: `
+    ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
+
+    <div class="card">
+      <h3>カテゴリーの管理</h3>
+      ${categoryManageCardHtml(categories)}
+    </div>
+
     <div class="card">
       <h2>📚 素材ライブラリ(${(library || []).length}/${MAX_LIBRARY_ITEMS})</h2>
       <p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">ここに登録した動画・画像は、各会員の詳細ページから選んで追加できます。</p>
-      ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
-      ${libraryListHtml(library, { mode: 'manage' })}
+      ${libraryListHtml(library, { mode: 'manage', categories })}
       ${
         (library || []).length < MAX_LIBRARY_ITEMS
           ? `<form method="POST" action="/admin/library/video" class="inline-form" style="margin-top:16px;">
@@ -799,6 +1662,10 @@ function adminLibraryPage({ library, error }) {
               <div class="form-row">
                 <label>動画URL(YouTubeのURLを推奨)</label>
                 <input type="text" name="url" required placeholder="https://www.youtube.com/watch?v=...">
+              </div>
+              <div class="form-row">
+                <label>カテゴリー</label>
+                <select name="category">${categoryOptionsHtml(DEFAULT_LIBRARY_CATEGORY, categories)}</select>
               </div>
               <button class="btn primary" type="submit">動画を追加</button>
             </form>
@@ -811,7 +1678,26 @@ function adminLibraryPage({ library, error }) {
                 <label>画像ファイル(jpg/png/webp/gif、5MBまで)</label>
                 <input type="file" name="image" accept="image/*" required>
               </div>
+              <div class="form-row">
+                <label>カテゴリー</label>
+                <select name="category">${categoryOptionsHtml(DEFAULT_LIBRARY_CATEGORY, categories)}</select>
+              </div>
               <button class="btn primary" type="submit">画像を追加</button>
+            </form>
+            <form method="POST" action="/admin/library/html" enctype="multipart/form-data" class="inline-form" style="margin-top:12px;">
+              <div class="form-row">
+                <label>HTMLツール タイトル</label>
+                <input type="text" name="title" maxlength="60" required placeholder="例: 呼吸法トレーニング">
+              </div>
+              <div class="form-row">
+                <label>HTMLファイル(.html、500KBまで)</label>
+                <input type="file" name="htmlFile" accept=".html,.htm" required>
+              </div>
+              <div class="form-row">
+                <label>カテゴリー</label>
+                <select name="category">${categoryOptionsHtml(DEFAULT_LIBRARY_CATEGORY, categories)}</select>
+              </div>
+              <button class="btn primary" type="submit">HTMLツールを追加</button>
             </form>`
           : `<p style="font-size:0.85rem;color:var(--muted);margin-top:12px;">上限の${MAX_LIBRARY_ITEMS}件に達しています。追加するには先に削除してください。</p>`
       }
@@ -861,7 +1747,7 @@ function boardPage({ posts, userRole, userName, userId, error }) {
 
   return layout({
     title: 'みんなの掲示板 | オンライン運動元気倶楽部',
-    topbar: `<div class="topbar"><span class="brand"><a href="${userRole === 'admin' ? '/admin' : '/member'}">&larr; 戻る</a></span><form method="POST" action="/logout"><button type="submit">ログアウト</button></form></div>`,
+    topbar: `<div class="topbar"><span class="brand"><a href="${userRole === 'admin' ? '/admin' : '/member'}">&larr; 戻る</a></span></div>`,
     body: `
     ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
     <div class="card">
@@ -879,4 +1765,4 @@ function boardPage({ posts, userRole, userName, userId, error }) {
   });
 }
 
-module.exports = { escapeHtml, loginPage, memberPage, memberPasswordPage, adminPage, adminMemberPage, adminLibraryPage, boardPage };
+module.exports = { escapeHtml, loginPage, memberPage, memberPasswordPage, adminPage, adminMemberPage, adminLibraryPage, boardPage, guidePage };

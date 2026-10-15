@@ -2,7 +2,9 @@
 // 自分のPCで動かす場合はこちらが使われる(MONGODB_URIが無い時のデフォルト)
 const fs = require('fs');
 const path = require('path');
-const { MAX_MEMBER_MEDIA, MAX_LIBRARY_ITEMS } = require('./stats');
+const { MAX_MEMBER_MEDIA, MAX_LIBRARY_ITEMS, DEFAULT_LIBRARY_CATEGORIES_SEED, DEFAULT_LIBRARY_CATEGORY, MAX_LIBRARY_CATEGORIES, todayStr, nowStr } = require('./stats');
+
+const MAX_AUTO_BACKUPS = 14; // 自動バックアップは直近14件だけ残す
 
 const DATA_DIR = path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'data.json');
@@ -21,6 +23,9 @@ function ensureDataFile() {
           sessions: [],
           media: [],
           library: [],
+          pushSubscriptions: [],
+          settings: { rankUpMessages: {} },
+          backups: [],
           nextUserId: 1,
           nextCheckinId: 1,
           nextMessageId: 1,
@@ -45,6 +50,10 @@ function load() {
   if (!Array.isArray(data.sessions)) data.sessions = [];
   if (!Array.isArray(data.media)) data.media = [];
   if (!Array.isArray(data.library)) data.library = [];
+  if (!Array.isArray(data.pushSubscriptions)) data.pushSubscriptions = [];
+  if (!data.settings || typeof data.settings !== 'object') data.settings = {};
+  if (!data.settings.rankUpMessages || typeof data.settings.rankUpMessages !== 'object') data.settings.rankUpMessages = {};
+  if (!Array.isArray(data.backups)) data.backups = [];
   if (typeof data.nextMessageId !== 'number') data.nextMessageId = 1;
   if (typeof data.nextPostId !== 'number') data.nextPostId = 1;
   if (typeof data.nextReplyId !== 'number') data.nextReplyId = 1;
@@ -81,7 +90,7 @@ function save(data) {
 }
 
 // --- ログインセッション(サーバー再起動をまたいでもログイン状態を保つためファイルに保存する) ---
-const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30日
+const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 365 * 10; // 10年(実質無期限)
 
 function createSession(id, user) {
   const data = load();
@@ -106,6 +115,13 @@ function destroySession(id) {
   save(data);
 }
 
+// その人のログインを全て終了させる(アカウントを削除した時に、削除済みの人がログインしたまま操作できないようにする)
+function destroySessionsForUser(userId) {
+  const data = load();
+  data.sessions = (data.sessions || []).filter((s) => !(s.user && s.user.id === Number(userId)));
+  save(data);
+}
+
 // --- users ---
 function getUserByUsername(username) {
   return load().users.find(u => u.username === username);
@@ -117,6 +133,21 @@ function getUserById(id) {
 
 function getAllMembers() {
   return load().users.filter(u => u.role === 'member');
+}
+
+// 管理者アカウントの一覧(管理画面の「管理者アカウント」欄で使う。登録順)
+function getAllAdmins() {
+  return load().users.filter((u) => u.role === 'admin').sort((a, b) => a.id - b.id);
+}
+
+function updateUsername(id, username) {
+  const data = load();
+  const user = data.users.find((u) => u.id === Number(id));
+  if (user) {
+    user.username = username;
+    save(data);
+  }
+  return user;
 }
 
 function createUser({ name, username, passwordHash, role }) {
@@ -148,14 +179,57 @@ function updateUserPassword(id, passwordHash) {
   return user;
 }
 
+// 会員が自分で設定できる表示名(会員画面にだけ反映、管理画面の氏名表示には影響しない)
+function updateUserDisplayName(id, displayName) {
+  const data = load();
+  const user = data.users.find((u) => u.id === Number(id));
+  if (user) {
+    user.displayName = displayName;
+    save(data);
+  }
+  return user;
+}
+
+// ランキングから除外するかどうか(スタッフのテスト用アカウントなどを対象外にするため)
+function setMemberRankingExcluded(id, excluded) {
+  const data = load();
+  const user = data.users.find((u) => u.id === Number(id));
+  if (user) {
+    user.excludeFromRanking = !!excluded;
+    save(data);
+  }
+  return user;
+}
+
+// --- アプリ全体の設定(現時点ではランクアップ時のお祝いメッセージのみ) ---
+function getSettings() {
+  return { ...load().settings };
+}
+
+function updateSettings(patch) {
+  const data = load();
+  data.settings = { ...data.settings, ...patch };
+  save(data);
+  return { ...data.settings };
+}
+
 // 会員ごとの動画・画像(合わせて最大MAX_MEMBER_MEDIA件、独立した一覧として保存する)
+// sortOrderが無い古いデータはidをそのまま並び順として使う(見た目の順番は変わらない)
 function getMediaForMember(memberId) {
   return load()
     .media.filter((m) => m.memberId === Number(memberId))
-    .sort((a, b) => a.id - b.id);
+    .map((m) => ({ ...m, sortOrder: m.sortOrder != null ? m.sortOrder : m.id }))
+    .sort((a, b) => a.sortOrder - b.sortOrder);
 }
 
-function addMemberMedia(memberId, { type, title, url, imageData, mimeType, note, createdAt }) {
+// 画像そのもの(base64)を1件だけ取り出す(ページHTMLに埋め込まず、専用URLで配信するため)
+function getMediaImageById(mediaId) {
+  const item = load().media.find((m) => m.id === Number(mediaId));
+  if (!item) return null;
+  return { memberId: item.memberId, mimeType: item.mimeType, imageData: item.imageData };
+}
+
+function addMemberMedia(memberId, { type, title, url, imageData, mimeType, htmlContent, note, createdAt }) {
   const data = load();
   const user = data.users.find((u) => u.id === Number(memberId));
   if (!user) throw new Error('会員が見つかりません');
@@ -163,7 +237,8 @@ function addMemberMedia(memberId, { type, title, url, imageData, mimeType, note,
   if (existing.length >= MAX_MEMBER_MEDIA) {
     throw new Error(`動画・画像は合わせて最大${MAX_MEMBER_MEDIA}件までです`);
   }
-  const item = { id: data.nextMediaId++, memberId: Number(memberId), type, title, url, imageData, mimeType, note, createdAt };
+  const id = data.nextMediaId++;
+  const item = { id, memberId: Number(memberId), type, title, url, imageData, mimeType, htmlContent, note, createdAt, sortOrder: id };
   data.media.push(item);
   save(data);
   return item;
@@ -172,6 +247,29 @@ function addMemberMedia(memberId, { type, title, url, imageData, mimeType, note,
 function removeMemberMedia(memberId, mediaId) {
   const data = load();
   data.media = data.media.filter((m) => !(m.id === Number(mediaId) && m.memberId === Number(memberId)));
+  save(data);
+}
+
+// 会員の動画・画像一覧の表示順を1つ上/下に入れ替える(direction: 'up' | 'down')
+function moveMemberMedia(memberId, mediaId, direction) {
+  const data = load();
+  const items = data.media
+    .filter((m) => m.memberId === Number(memberId))
+    .map((m) => {
+      if (m.sortOrder == null) m.sortOrder = m.id;
+      return m;
+    })
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+  const idx = items.findIndex((m) => m.id === Number(mediaId));
+  if (idx === -1) throw new Error('動画・画像が見つかりません');
+  const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+  if (swapIdx < 0 || swapIdx >= items.length) {
+    save(data); // sortOrderの補完(初回のみ)を保存しておく
+    return;
+  }
+  const tmp = items[idx].sortOrder;
+  items[idx].sortOrder = items[swapIdx].sortOrder;
+  items[swapIdx].sortOrder = tmp;
   save(data);
 }
 
@@ -186,18 +284,95 @@ function updateMemberMediaNote(memberId, mediaId, note) {
 }
 
 // --- 素材ライブラリ(会員に配る前の動画・画像を管理者がまとめて置いておく場所) ---
+// 画像そのもの(base64)を1件だけ取り出す(ページHTMLに埋め込まず、専用URLで配信するため)
+function getLibraryImageById(libraryId) {
+  const item = load().library.find((m) => m.id === Number(libraryId));
+  if (!item) return null;
+  return { mimeType: item.mimeType, imageData: item.imageData };
+}
+
 function getLibrary() {
   return load()
     .library.slice()
     .sort((a, b) => b.id - a.id);
 }
 
-function addLibraryItem({ type, title, url, imageData, mimeType, createdAt }) {
+// カテゴリー一覧を保証する(初回はシード値で初期化、「その他」は必ず含める)
+function ensureCategories(data) {
+  if (!Array.isArray(data.categories) || !data.categories.length) {
+    data.categories = DEFAULT_LIBRARY_CATEGORIES_SEED.slice();
+  }
+  if (!data.categories.includes(DEFAULT_LIBRARY_CATEGORY)) {
+    data.categories.push(DEFAULT_LIBRARY_CATEGORY);
+  }
+  return data.categories;
+}
+
+function getLibraryCategories() {
+  const data = load();
+  const categories = ensureCategories(data);
+  save(data);
+  return categories.slice();
+}
+
+// カテゴリーを追加する(「その他」の手前に挿入し、「その他」が常に最後になるようにする)
+function addLibraryCategory(name) {
+  const data = load();
+  const categories = ensureCategories(data);
+  const trimmed = (name || '').trim();
+  if (!trimmed) throw new Error('カテゴリー名を入力してください');
+  if (trimmed.length > 20) throw new Error('カテゴリー名は20文字までです');
+  if (categories.includes(trimmed)) throw new Error('同じ名前のカテゴリーがすでにあります');
+  if (categories.length >= MAX_LIBRARY_CATEGORIES) throw new Error(`カテゴリーは最大${MAX_LIBRARY_CATEGORIES}件までです`);
+  const otherIdx = categories.indexOf(DEFAULT_LIBRARY_CATEGORY);
+  if (otherIdx === -1) categories.push(trimmed);
+  else categories.splice(otherIdx, 0, trimmed);
+  save(data);
+  return categories.slice();
+}
+
+// カテゴリー名を変更する(該当する素材のカテゴリーも一緒に更新する)。「その他」は変更不可
+function renameLibraryCategory(oldName, newName) {
+  const data = load();
+  const categories = ensureCategories(data);
+  if (oldName === DEFAULT_LIBRARY_CATEGORY) throw new Error('「その他」の名前は変更できません');
+  const idx = categories.indexOf(oldName);
+  if (idx === -1) throw new Error('カテゴリーが見つかりません');
+  const trimmed = (newName || '').trim();
+  if (!trimmed) throw new Error('カテゴリー名を入力してください');
+  if (trimmed.length > 20) throw new Error('カテゴリー名は20文字までです');
+  if (trimmed !== oldName && categories.includes(trimmed)) throw new Error('同じ名前のカテゴリーがすでにあります');
+  categories[idx] = trimmed;
+  data.library.forEach((item) => {
+    if (item.category === oldName) item.category = trimmed;
+  });
+  save(data);
+  return categories.slice();
+}
+
+// カテゴリーを削除する(このカテゴリーを使っていた素材は「その他」に移す)。「その他」は削除不可
+function deleteLibraryCategory(name) {
+  const data = load();
+  const categories = ensureCategories(data);
+  if (name === DEFAULT_LIBRARY_CATEGORY) throw new Error('「その他」は削除できません');
+  const idx = categories.indexOf(name);
+  if (idx === -1) throw new Error('カテゴリーが見つかりません');
+  categories.splice(idx, 1);
+  data.library.forEach((item) => {
+    if (item.category === name) item.category = DEFAULT_LIBRARY_CATEGORY;
+  });
+  save(data);
+  return categories.slice();
+}
+
+function addLibraryItem({ type, title, url, imageData, mimeType, htmlContent, category, createdAt }) {
   const data = load();
   if (data.library.length >= MAX_LIBRARY_ITEMS) {
     throw new Error(`素材ライブラリは最大${MAX_LIBRARY_ITEMS}件までです`);
   }
-  const item = { id: data.nextLibraryId++, type, title, url, imageData, mimeType, createdAt };
+  const categories = ensureCategories(data);
+  const cat = categories.includes(category) ? category : DEFAULT_LIBRARY_CATEGORY;
+  const item = { id: data.nextLibraryId++, type, title, url, imageData, mimeType, htmlContent, category: cat, createdAt };
   data.library.push(item);
   save(data);
   return item;
@@ -207,6 +382,17 @@ function removeLibraryItem(libraryId) {
   const data = load();
   data.library = data.library.filter((m) => m.id !== Number(libraryId));
   save(data);
+}
+
+// ライブラリ素材のカテゴリーを変更する
+function updateLibraryItemCategory(libraryId, category) {
+  const data = load();
+  const categories = ensureCategories(data);
+  const item = data.library.find((m) => m.id === Number(libraryId));
+  if (!item) throw new Error('素材が見つかりません');
+  item.category = categories.includes(category) ? category : DEFAULT_LIBRARY_CATEGORY;
+  save(data);
+  return item;
 }
 
 // ライブラリの素材を、指定した会員の動画・画像一覧にコピーする(ライブラリ側は残る)
@@ -228,6 +414,7 @@ function assignLibraryItemToMember(memberId, libraryId, note, createdAt) {
     url: libItem.url,
     imageData: libItem.imageData,
     mimeType: libItem.mimeType,
+    htmlContent: libItem.htmlContent,
     note: note || '',
     createdAt,
   };
@@ -288,33 +475,41 @@ function getMessagesForMember(memberId) {
     .sort((a, b) => a.id - b.id);
 }
 
-// readerRoleから見て「相手」が送った未読メッセージがあるか(会員ページ・管理者の会員詳細ページの通知に使う)
-function hasUnreadMessages(memberId, readerRole) {
-  const otherRole = readerRole === 'admin' ? 'member' : 'admin';
-  return load().messages.some(
-    (m) => m.memberId === Number(memberId) && m.senderRole === otherRole && m.read === false
-  );
+// 未読かどうか。会員発信のメッセージは管理者ごとに既読を管理する(readByに既読にした管理者のIDを入れる)ので、
+// 管理者が複数いても、1人が開いただけで他の管理者の通知が消えることはない。
+// (readはこの仕組みより前に既読になったメッセージの印。read:trueのものは全管理者にとって既読扱い)
+function isUnreadFor(m, readerRole, readerId) {
+  if (m.read !== false) return false;
+  if (readerRole === 'admin') {
+    return m.senderRole === 'member' && !(m.readBy || []).includes(Number(readerId));
+  }
+  return m.senderRole === 'admin';
 }
 
-// readerRoleから見て「相手」が送った未読メッセージを全て既読にする(会員ページ・管理者の会員詳細ページを開いた時に呼ぶ)
-function markMessagesRead(memberId, readerRole) {
-  const otherRole = readerRole === 'admin' ? 'member' : 'admin';
+// readerRole(とreaderId)から見て「相手」が送った未読メッセージがあるか(会員ページ・管理者の会員詳細ページの通知に使う)
+function hasUnreadMessages(memberId, readerRole, readerId) {
+  return load().messages.some((m) => m.memberId === Number(memberId) && isUnreadFor(m, readerRole, readerId));
+}
+
+// readerRole(とreaderId)から見て「相手」が送った未読メッセージを全て既読にする(会員ページ・管理者の会員詳細ページを開いた時に呼ぶ)
+function markMessagesRead(memberId, readerRole, readerId) {
   const data = load();
   let changed = false;
   data.messages.forEach((m) => {
-    if (m.memberId === Number(memberId) && m.senderRole === otherRole && m.read === false) {
-      m.read = true;
+    if (m.memberId === Number(memberId) && isUnreadFor(m, readerRole, readerId)) {
+      if (readerRole === 'admin') m.readBy = [...(m.readBy || []), Number(readerId)];
+      else m.read = true;
       changed = true;
     }
   });
   if (changed) save(data);
 }
 
-// 管理者ダッシュボード用: 未読(会員発信)メッセージがある会員の一覧
-function getMembersWithUnreadMessages() {
+// 管理者ダッシュボード用: その管理者(adminId)にとって未読の会員発信メッセージがある会員の一覧
+function getMembersWithUnreadMessages(adminId) {
   const data = load();
   const memberIds = new Set(
-    data.messages.filter((m) => m.senderRole === 'member' && m.read === false).map((m) => m.memberId)
+    data.messages.filter((m) => isUnreadFor(m, 'admin', adminId)).map((m) => m.memberId)
   );
   return data.users.filter((u) => memberIds.has(u.id)).map((u) => ({ id: u.id, name: u.name }));
 }
@@ -340,6 +535,39 @@ function deleteMessage(messageId, requesterRole, requesterId) {
   }
   data.messages = data.messages.filter((m) => m.id !== Number(messageId));
   save(data);
+}
+
+// --- プッシュ通知の購読情報(ホーム画面に追加したスマホなどに通知を送るため) ---
+// 同じ端末から再登録された場合はendpointで上書きする(重複登録・重複通知を防ぐ)
+async function addPushSubscription(userId, role, subscription) {
+  const data = load();
+  if (!Array.isArray(data.pushSubscriptions)) data.pushSubscriptions = [];
+  data.pushSubscriptions = data.pushSubscriptions.filter((s) => s.endpoint !== subscription.endpoint);
+  data.pushSubscriptions.push({
+    userId: Number(userId),
+    role,
+    endpoint: subscription.endpoint,
+    keys: subscription.keys,
+    createdAt: nowStr(),
+  });
+  save(data);
+}
+
+async function removePushSubscriptionByEndpoint(endpoint) {
+  const data = load();
+  if (!Array.isArray(data.pushSubscriptions)) return;
+  data.pushSubscriptions = data.pushSubscriptions.filter((s) => s.endpoint !== endpoint);
+  save(data);
+}
+
+async function getPushSubscriptionsForUser(userId) {
+  const data = load();
+  return (data.pushSubscriptions || []).filter((s) => s.userId === Number(userId));
+}
+
+async function getPushSubscriptionsForRole(role) {
+  const data = load();
+  return (data.pushSubscriptions || []).filter((s) => s.role === role);
 }
 
 // --- 会員向け掲示板(会員が投稿、返信できるのは管理者のみ) ---
@@ -385,6 +613,36 @@ function exportRaw() {
   return JSON.stringify(load(), null, 2);
 }
 
+// 自動バックアップの一覧(中身のデータは含めない、日付が新しい順)
+function listBackups() {
+  return load()
+    .backups.map((b) => ({ id: b.id, date: b.date, createdAt: b.createdAt }))
+    .sort((a, b) => b.date.localeCompare(a.date));
+}
+
+// 自動バックアップの中身(JSON文字列)を1件取得する
+function getBackupRaw(id) {
+  const b = load().backups.find((x) => x.id === Number(id));
+  return b ? b.data : null;
+}
+
+// 1日1回、まだ今日のバックアップが無ければ自動で作成する(会員・管理者どちらかがアクセスした時に呼ばれる)
+// 古いものは自動で削除し、件数が増えすぎないようにする
+async function ensureDailyBackup() {
+  const data = load();
+  const today = todayStr();
+  const already = data.backups.some((b) => b.date === today);
+  if (already) return;
+  const { backups, ...rest } = data; // バックアップ自体の中に一覧を含めて肥大化しないようにする
+  const nextId = data.backups.reduce((max, b) => Math.max(max, b.id + 1), 1);
+  data.backups.push({ id: nextId, date: today, createdAt: nowStr(), data: JSON.stringify(rest) });
+  data.backups.sort((a, b) => b.date.localeCompare(a.date));
+  if (data.backups.length > MAX_AUTO_BACKUPS) {
+    data.backups = data.backups.slice(0, MAX_AUTO_BACKUPS);
+  }
+  save(data);
+}
+
 function importRaw(jsonStr) {
   const parsed = JSON.parse(jsonStr);
   if (!Array.isArray(parsed.users) || !Array.isArray(parsed.checkins)) {
@@ -416,19 +674,25 @@ function importRaw(jsonStr) {
   if (typeof parsed.nextLibraryId !== 'number') {
     parsed.nextLibraryId = parsed.library.reduce((max, m) => Math.max(max, m.id + 1), 1);
   }
+  if (!Array.isArray(parsed.backups)) parsed.backups = [];
   save(parsed);
 }
 
 module.exports = {
   backend: 'file',
   createSession,
+  destroySessionsForUser,
   getSession,
   destroySession,
   getUserByUsername,
   getUserById,
   getAllMembers,
+  getAllAdmins,
+  updateUsername,
   createUser,
   updateUserPassword,
+  updateUserDisplayName,
+  setMemberRankingExcluded,
   deleteUser,
   getCheckinsForUser,
   hasCheckinForDate,
@@ -438,12 +702,22 @@ module.exports = {
   getAllCheckins,
   incrementRewardsGiven,
   getMediaForMember,
+  getMediaImageById,
   addMemberMedia,
   removeMemberMedia,
+  moveMemberMedia,
   updateMemberMediaNote,
+  getSettings,
+  updateSettings,
   getLibrary,
+  getLibraryImageById,
+  getLibraryCategories,
+  addLibraryCategory,
+  renameLibraryCategory,
+  deleteLibraryCategory,
   addLibraryItem,
   removeLibraryItem,
+  updateLibraryItemCategory,
   assignLibraryItemToMember,
   getMessagesForMember,
   hasUnreadMessages,
@@ -451,10 +725,17 @@ module.exports = {
   getMembersWithUnreadMessages,
   addMessage,
   deleteMessage,
+  addPushSubscription,
+  removePushSubscriptionByEndpoint,
+  getPushSubscriptionsForUser,
+  getPushSubscriptionsForRole,
   getBoardPosts,
   addBoardPost,
   addBoardReply,
   deleteBoardPost,
   exportRaw,
   importRaw,
+  listBackups,
+  getBackupRaw,
+  ensureDailyBackup,
 };

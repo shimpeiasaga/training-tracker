@@ -16,23 +16,75 @@ const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
 const MIME = { '.css': 'text/css', '.js': 'application/javascript', '.json': 'application/json', '.png': 'image/png' };
-const STATIC_PATHS = new Set(['/style.css', '/manifest.json', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png']);
+const STATIC_PATHS = new Set(['/style.css', '/manifest.json', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png', '/sw.js']);
+
+// プッシュ通知(ホーム画面に追加した端末への通知)。web-pushが未インストール/未設定でも
+// サーバー全体が落ちないように、読み込み・設定は失敗してもよいものとして扱う
+let webpush = null;
+try {
+  webpush = require('web-push');
+} catch (err) {
+  console.warn('web-pushモジュールが見つからないため、プッシュ通知は無効になります');
+}
+// このアプリ専用に発行した鍵(Renderの環境変数を増やさずに済むよう、直接コードに書いている)
+const VAPID_PUBLIC_KEY = 'BCoY8NRiYz9aDDaieVrcBq1viOncq7aJvMqs7ec7xH64e8vqVDEB-d9tUrTK7obRvooGB2I6j0YpyXx7NxnsPWg';
+const VAPID_PRIVATE_KEY = 'LSUfKN5rkJkSnmLeQDjTrGaIpdUAKFrMyJktN-pyfnI';
+const PUSH_ENABLED = !!(webpush && VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY);
+if (PUSH_ENABLED) {
+  webpush.setVapidDetails('mailto:admin@example.com', VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+} else {
+  console.warn('VAPID鍵が未設定のため、プッシュ通知は無効になります');
+}
+
+// 複数の購読(同じ人が複数の端末をホーム画面に追加している場合など)にまとめて送る。
+// 端末側の登録が失効している場合(410/404)は購読情報を自動で削除しておく
+async function sendPushToSubscriptions(subscriptions, payload) {
+  if (!PUSH_ENABLED || !subscriptions || !subscriptions.length) return;
+  const body = JSON.stringify(payload);
+  await Promise.all(
+    subscriptions.map(async (sub) => {
+      try {
+        await webpush.sendNotification({ endpoint: sub.endpoint, keys: sub.keys }, body);
+      } catch (err) {
+        if (err && (err.statusCode === 404 || err.statusCode === 410)) {
+          try {
+            await db.removePushSubscriptionByEndpoint(sub.endpoint);
+          } catch (cleanupErr) {
+            console.error('失効したプッシュ購読の削除に失敗しました:', cleanupErr);
+          }
+        } else {
+          console.error('プッシュ通知の送信に失敗しました:', err);
+        }
+      }
+    })
+  );
+}
 
 // 自動バックアップを1日1回だけ確認するためのプロセス内キャッシュ(毎リクエストDBに問い合わせないようにする)
 let lastBackupCheckDate = null;
 
-// 初回起動時に管理者アカウントがなければ自動で作る
+const DEFAULT_ADMIN_USERNAME = 'undogenkiclub';
+
+// 起動時の管理者アカウントの確認
 // (Renderなどshellが使えないホスティング環境でも、npm run seedを手動実行しなくて済むように)
 async function ensureDefaultAdmin() {
-  const existing = await db.getUserByUsername('admin');
-  if (!existing) {
+  // 1人目の管理者のユーザー名を「admin」から「undogenkiclub」に変更する(2026-10。パスワードはそのまま)
+  const legacy = await db.getUserByUsername('admin');
+  if (legacy && legacy.role === 'admin' && !(await db.getUserByUsername(DEFAULT_ADMIN_USERNAME))) {
+    await db.updateUsername(legacy.id, DEFAULT_ADMIN_USERNAME);
+    console.log(`管理者のユーザー名を admin から ${DEFAULT_ADMIN_USERNAME} に変更しました`);
+  }
+  // 管理者が1人もいない時(初回起動)だけ初期の管理者アカウントを作る。
+  // (特定のユーザー名の有無で判断すると、ユーザー名を変えた後に初期パスワードのアカウントが復活してしまうため)
+  const admins = await db.getAllAdmins();
+  if (!admins.length) {
     await db.createUser({
       name: '管理者',
-      username: 'admin',
+      username: DEFAULT_ADMIN_USERNAME,
       passwordHash: crypto.hashPassword('admin123'),
       role: 'admin',
     });
-    console.log('初回起動: 管理者アカウントを自動作成しました (username: admin / password: admin123)');
+    console.log(`初回起動: 管理者アカウントを自動作成しました (username: ${DEFAULT_ADMIN_USERNAME} / password: admin123)`);
     console.log('※ ログイン後、必ずパスワードを変更してください');
   }
 }
@@ -63,18 +115,34 @@ function resolveViewMonth(url) {
   return current;
 }
 
-// 今月のチェック回数で会員をランキングする(同点は同順位)
-// useDisplayName=trueの時は会員が自分で設定した表示名を使う(会員画面向け)。管理画面では常に本名を使う
-async function computeMonthlyRanking(useDisplayName = false) {
-  const members = (await db.getAllMembers()).filter((m) => !m.excludeFromRanking);
-  const list = await Promise.all(
-    members.map(async (m) => {
-      const checkins = (await db.getCheckinsForUser(m.id)).map((c) => c.date);
-      const name = useDisplayName && m.displayName ? m.displayName : m.name;
-      return { id: m.id, name, count: stats.currentMonthCount(checkins) };
-    })
+// 会員全員と、それぞれのチェックイン履歴をまとめて取得する(1回のDB往復で済ませ、進捗表・ランキングなどで使い回す)
+async function getMembersWithCheckins() {
+  const allMembers = await db.getAllMembers();
+  return Promise.all(
+    allMembers.map(async (m) => ({
+      ...m,
+      checkins: (await db.getCheckinsForUser(m.id)).map((c) => c.date),
+    }))
   );
+}
+
+// 今月のチェック回数で会員をランキングする(同点は同順位)。すでに取得済みのmembersWithCheckinsがあれば使い回す
+// useDisplayName=trueの時は会員が自分で設定した表示名を使う(会員画面向け)。管理画面では常に本名を使う
+// excludeZero=trueの時は今月0回の会員をランキングから除外する(会員画面向け。管理画面では全員表示する)
+function rankFromMembers(membersWithCheckins, useDisplayName = false, excludeZero = false) {
+  const list = membersWithCheckins
+    .filter((m) => !m.excludeFromRanking)
+    .map((m) => ({
+      id: m.id,
+      name: useDisplayName && m.displayName ? m.displayName : m.name,
+      count: stats.currentMonthCount(m.checkins),
+    }))
+    .filter((m) => !excludeZero || m.count > 0);
   return stats.rankMembers(list);
+}
+
+async function computeMonthlyRanking(useDisplayName = false, excludeZero = false) {
+  return rankFromMembers(await getMembersWithCheckins(), useDisplayName, excludeZero);
 }
 
 function serveStatic(req, res, pathname) {
@@ -89,12 +157,33 @@ function serveStatic(req, res, pathname) {
       return res.end('Not found');
     }
     const ext = path.extname(filePath);
-    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
+    // CSS・アイコンなどは内容が変わらない限りブラウザにキャッシュさせ、毎回の再ダウンロードを避ける。
+    // ただしsw.js(サービスワーカー)はキャッシュさせると更新内容がなかなか反映されないため、常に最新を取りに行かせる
+    res.writeHead(200, {
+      'Content-Type': MIME[ext] || 'application/octet-stream',
+      'Cache-Control': pathname === '/sw.js' ? 'no-cache' : 'public, max-age=3600',
+    });
     res.end(data);
   });
 }
 
 const server = http.createServer(async (req, res) => {
+  // ルート処理中に想定外のエラーが起きても、サーバー全体を落とさずそのリクエストだけエラーにする
+  // (以前、DB側の関数呼び出しミスが原因でサーバープロセスごと落ちてしまったことがあったための対策)
+  try {
+    return await handleRequest(req, res);
+  } catch (err) {
+    console.error('リクエスト処理中にエラーが発生しました:', err);
+    if (!res.headersSent) {
+      res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('エラーが発生しました。しばらくしてからもう一度お試しください。');
+    } else {
+      res.end();
+    }
+  }
+});
+
+async function handleRequest(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const pathname = url.pathname;
   const method = req.method;
@@ -121,7 +210,7 @@ const server = http.createServer(async (req, res) => {
     }
     const newSid = sess.generateSessionId();
     await db.createSession(newSid, { id: u.id, name: u.name, username: u.username, role: u.role });
-    return redirect(res, '/', { 'Set-Cookie': sess.cookieHeader(newSid, 60 * 60 * 24 * 30) });
+    return redirect(res, '/', { 'Set-Cookie': sess.cookieHeader(newSid, 60 * 60 * 24 * 365 * 10) }); // 10年(実質無期限)
   }
 
   if (method === 'POST' && pathname === '/logout') {
@@ -132,6 +221,39 @@ const server = http.createServer(async (req, res) => {
   // ここから先はログイン必須
   if (!user) {
     return redirect(res, '/login');
+  }
+
+  // --- プッシュ通知の購読登録・解除・公開鍵取得(会員・管理者共通) ---
+  if (pathname === '/push/vapid-public-key' && method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify({ enabled: PUSH_ENABLED, key: PUSH_ENABLED ? VAPID_PUBLIC_KEY : '' }));
+  }
+
+  if (pathname === '/push/subscribe' && method === 'POST') {
+    try {
+      const body = await parseBody(req);
+      const subscription = JSON.parse(body.subscription || '{}');
+      if (subscription && subscription.endpoint && subscription.keys) {
+        await db.addPushSubscription(user.id, user.role, subscription);
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ ok: true }));
+    } catch (err) {
+      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ ok: false }));
+    }
+  }
+
+  if (pathname === '/push/unsubscribe' && method === 'POST') {
+    try {
+      const body = await parseBody(req);
+      if (body.endpoint) await db.removePushSubscriptionByEndpoint(body.endpoint);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ ok: true }));
+    } catch (err) {
+      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ ok: false }));
+    }
   }
 
   // 1日1回、まだ今日分のバックアップが無ければ自動で取っておく(手動ダウンロードを忘れても大丈夫にするため)。
@@ -150,11 +272,58 @@ const server = http.createServer(async (req, res) => {
     return redirect(res, user.role === 'admin' ? '/admin' : '/member');
   }
 
+  // 画像はページのHTMLに埋め込まず、専用URLから配信する(ページ本体を軽くして表示を速くし、
+  // ブラウザに画像だけキャッシュさせて再読み込み時に毎回ダウンロードし直さないようにするため)
+  let mediaImageMatch = pathname.match(/^\/media\/(\d+)\/image$/);
+  if (mediaImageMatch && method === 'GET') {
+    const item = await db.getMediaImageById(mediaImageMatch[1]);
+    if (!item || !item.imageData) {
+      res.writeHead(404);
+      return res.end('Not found');
+    }
+    if (user.role !== 'admin' && Number(item.memberId) !== Number(user.id)) {
+      res.writeHead(403);
+      return res.end('Forbidden');
+    }
+    res.writeHead(200, {
+      'Content-Type': item.mimeType || 'application/octet-stream',
+      'Cache-Control': 'private, max-age=604800, immutable',
+    });
+    return res.end(Buffer.from(item.imageData, 'base64'));
+  }
+
+  let libraryImageMatch = pathname.match(/^\/library\/(\d+)\/image$/);
+  if (libraryImageMatch && method === 'GET') {
+    if (user.role !== 'admin') {
+      res.writeHead(403);
+      return res.end('Forbidden');
+    }
+    const item = await db.getLibraryImageById(libraryImageMatch[1]);
+    if (!item || !item.imageData) {
+      res.writeHead(404);
+      return res.end('Not found');
+    }
+    res.writeHead(200, {
+      'Content-Type': item.mimeType || 'application/octet-stream',
+      'Cache-Control': 'private, max-age=604800, immutable',
+    });
+    return res.end(Buffer.from(item.imageData, 'base64'));
+  }
+
   // --- 会員ページ ---
   if (pathname === '/member' && method === 'GET') {
-    const memberUser = await db.getUserById(user.id);
-    const settings = await db.getSettings();
-    const checkinRecords = await db.getCheckinsForUser(user.id);
+    // 互いに関係ない読み込みはまとめて並行実行する(1つずつ順番に待つと遅くなるため)
+    const [memberUser, settings, checkinRecords, hasUnreadMessages, memberMessages, ranked, media, pushSubs] = await Promise.all([
+      db.getUserById(user.id),
+      db.getSettings(),
+      db.getCheckinsForUser(user.id),
+      db.hasUnreadMessages(user.id, 'member'),
+      db.getMessagesForMember(user.id),
+      computeMonthlyRanking(true, true),
+      db.getMediaForMember(user.id),
+      db.getPushSubscriptionsForUser(user.id),
+    ]);
+    const hasPushSubscription = pushSubs.length > 0;
     const checkins = checkinRecords.map((c) => c.date);
     const today = stats.todayStr();
     const streak = stats.currentStreak(checkins);
@@ -163,14 +332,13 @@ const server = http.createServer(async (req, res) => {
     const rewardCelebrate = celebrate && url.searchParams.get('reward') === '1';
     const viewMonth = resolveViewMonth(url);
     const currentMonth = stats.monthKey(today);
-    const hasUnreadMessages = await db.hasUnreadMessages(user.id, 'member');
-    const memberMessages = await db.getMessagesForMember(user.id);
     if (hasUnreadMessages) await db.markMessagesRead(user.id, 'member');
     return sendHtml(
       res,
       200,
       views.memberPage({
         hasUnreadMessages,
+        hasPushSubscription,
         userName: (memberUser && memberUser.displayName) || user.name,
         rankUpMessages: settings.rankUpMessages,
         today,
@@ -190,7 +358,7 @@ const server = http.createServer(async (req, res) => {
         rewardMonths: stats.REWARD_MONTHS,
         badges: stats.streakBadges(totalDays),
         nextBadge: stats.nextStreakBadge(totalDays),
-        ranked: await computeMonthlyRanking(true),
+        ranked,
         userId: user.id,
         celebrate,
         milestoneBadge: celebrate ? stats.justUnlockedBadge(totalDays) : null,
@@ -199,9 +367,17 @@ const server = http.createServer(async (req, res) => {
         checkinRecords,
         badgeLog: stats.badgeUnlockLog(checkins),
         messages: memberMessages,
-        media: await db.getMediaForMember(user.id),
+        media,
       })
     );
+  }
+
+  // プッシュ通知(service workerからのpostMessage)が届かない端末でも確実にメッセージを
+  // 最新化できるよう、画面側が定期的にこの件数を確認して増えていたら再読み込みする(ポーリング)
+  if (pathname === '/member/messages/count' && method === 'GET') {
+    const msgs = await db.getMessagesForMember(user.id);
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify({ count: msgs.length, lastId: msgs.length ? msgs[msgs.length - 1].id : 0 }));
   }
 
   if (pathname === '/member/messages' && method === 'POST') {
@@ -215,8 +391,31 @@ const server = http.createServer(async (req, res) => {
         body: text,
         createdAt: stats.nowStr(),
       });
+      // 会員からのメッセージは、管理者(全員)に通知する
+      // badgeCount: アイコンの赤丸に表示する数(未読のある会員の人数。管理画面の表示件数と揃える)。
+      // 既読は管理者ごとに別々なので、赤丸の数も管理者ごとに数えて送る
+      db.getPushSubscriptionsForRole('admin')
+        .then((subs) => {
+          const subsByAdmin = new Map();
+          subs.forEach((s) => {
+            if (!subsByAdmin.has(s.userId)) subsByAdmin.set(s.userId, []);
+            subsByAdmin.get(s.userId).push(s);
+          });
+          return Promise.all(
+            Array.from(subsByAdmin.entries()).map(async ([adminId, adminSubs]) => {
+              const unreadMembers = await db.getMembersWithUnreadMessages(adminId);
+              return sendPushToSubscriptions(adminSubs, {
+                title: `📩 ${user.name}さんからメッセージ`,
+                body: text,
+                url: `/admin/member/${user.id}#messages`,
+                badgeCount: unreadMembers.length,
+              });
+            })
+          );
+        })
+        .catch((err) => console.error('プッシュ通知の準備に失敗しました:', err));
     }
-    return redirect(res, '/member');
+    return redirect(res, '/member#messages');
   }
 
   let memberMsgDeleteMatch = pathname.match(/^\/member\/messages\/(\d+)\/delete$/);
@@ -227,7 +426,12 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(403);
       return res.end('権限がありません');
     }
-    return redirect(res, '/member');
+    return redirect(res, '/member#messages');
+  }
+
+  // --- 使い方ガイド(会員・管理者共通、内容は役割に応じて出し分け) ---
+  if (pathname === '/guide' && method === 'GET') {
+    return sendHtml(res, 200, views.guidePage(user.role));
   }
 
   // --- 会員向け掲示板(誰でも投稿できる、返信できるのは管理者のみ) ---
@@ -311,7 +515,7 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       // チェックインが存在しない日付を指定された場合などは何もせず戻る
     }
-    return redirect(res, '/member');
+    return redirect(res, '/member#history');
   }
 
   if (pathname === '/member/password' && method === 'GET') {
@@ -353,46 +557,57 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/admin' && method === 'GET') {
-      const allMembers = await db.getAllMembers();
-      const members = await Promise.all(
-        allMembers.map(async (m) => {
-          const checkins = (await db.getCheckinsForUser(m.id)).map((c) => c.date);
-          const streak = stats.currentStreak(checkins);
-          const monthlyStreak = stats.currentMonthlyStreak(checkins);
-          const earned = stats.rewardsEarned(monthlyStreak);
-          const given = m.rewardsGiven || 0;
-          const unlockedBadges = stats.streakBadges(checkins.length).filter((b) => b.achieved);
-          const topBadge = unlockedBadges.length ? unlockedBadges[unlockedBadges.length - 1] : null;
-          return {
-            id: m.id,
-            name: m.name,
-            username: m.username,
-            streak,
-            weekCount: stats.thisWeekCount(checkins),
-            total: checkins.length,
-            lastDate: checkins.length ? checkins[checkins.length - 1] : null,
-            monthCount: stats.currentMonthCount(checkins),
-            monthGoal: stats.MONTHLY_GOAL,
-            monthlyStreak,
-            rewardsEarned: earned,
-            rewardsGiven: given,
-            rewardsPending: Math.max(0, earned - given),
-            badgeIcon: topBadge ? topBadge.icon : null,
-            badgeLabel: topBadge ? topBadge.label : null,
-          };
-        })
-      );
+      // 会員+チェックイン履歴は1回だけ取得して、進捗表とランキングの両方で使い回す(重複取得しない)
+      const [membersWithCheckins, unreadMembers, settings, backups, memberPushSubs, admins] = await Promise.all([
+        getMembersWithCheckins(),
+        db.getMembersWithUnreadMessages(user.id),
+        db.getSettings(),
+        db.listBackups(),
+        db.getPushSubscriptionsForRole('member'),
+        db.getAllAdmins(),
+      ]);
+      // 通知をONにしている(=プッシュ購読が1件以上ある)会員のID一覧。声かけの目安として管理画面に表示する
+      const pushEnabledMemberIds = new Set(memberPushSubs.map((s) => Number(s.userId)));
+      const members = membersWithCheckins.map((m) => {
+        const checkins = m.checkins;
+        const streak = stats.currentStreak(checkins);
+        const monthlyStreak = stats.currentMonthlyStreak(checkins);
+        const earned = stats.rewardsEarned(monthlyStreak);
+        const given = m.rewardsGiven || 0;
+        const unlockedBadges = stats.streakBadges(checkins.length).filter((b) => b.achieved);
+        const topBadge = unlockedBadges.length ? unlockedBadges[unlockedBadges.length - 1] : null;
+        return {
+          id: m.id,
+          name: m.name,
+          username: m.username,
+          streak,
+          weekCount: stats.thisWeekCount(checkins),
+          total: checkins.length,
+          lastDate: checkins.length ? checkins[checkins.length - 1] : null,
+          monthCount: stats.currentMonthCount(checkins),
+          monthGoal: stats.MONTHLY_GOAL,
+          monthlyStreak,
+          rewardsEarned: earned,
+          rewardsGiven: given,
+          rewardsPending: Math.max(0, earned - given),
+          badgeIcon: topBadge ? topBadge.icon : null,
+          badgeLabel: topBadge ? topBadge.label : null,
+        };
+      });
       return sendHtml(
         res,
         200,
         views.adminPage({
           members,
-          unreadMembers: await db.getMembersWithUnreadMessages(),
-          ranked: await computeMonthlyRanking(),
+          unreadMembers,
+          ranked: rankFromMembers(membersWithCheckins),
           error: url.searchParams.get('error'),
           message: url.searchParams.get('message'),
-          rankUpMessages: (await db.getSettings()).rankUpMessages,
-          backups: await db.listBackups(),
+          rankUpMessages: settings.rankUpMessages,
+          backups,
+          pushEnabledMemberIds,
+          admins,
+          currentUserId: user.id,
         })
       );
     }
@@ -417,8 +632,60 @@ const server = http.createServer(async (req, res) => {
 
     let match = pathname.match(/^\/admin\/members\/(\d+)\/delete$/);
     if (match && method === 'POST') {
+      await db.destroySessionsForUser(match[1]);
       await db.deleteUser(match[1]);
       return redirect(res, '/admin?message=' + encodeURIComponent('削除しました'));
+    }
+
+    // --- 管理者アカウント(既読はアカウントごとに管理するので、管理者は1人1アカウントずつ使う) ---
+    if (pathname === '/admin/admins' && method === 'POST') {
+      const body = await parseBody(req);
+      const name = (body.name || '').trim();
+      const username = (body.username || '').trim();
+      const password = body.password || '';
+      if (!name || !username || !password) {
+        return redirect(res, '/admin?error=' + encodeURIComponent('すべての項目を入力してください') + '#admins');
+      }
+      if (password.length < 4) {
+        return redirect(res, '/admin?error=' + encodeURIComponent('パスワードは4文字以上にしてください') + '#admins');
+      }
+      if (await db.getUserByUsername(username)) {
+        return redirect(res, '/admin?error=' + encodeURIComponent('そのユーザー名は既に使われています') + '#admins');
+      }
+      await db.createUser({ name, username, passwordHash: crypto.hashPassword(password), role: 'admin' });
+      return redirect(res, '/admin?message=' + encodeURIComponent(`管理者「${name}」を追加しました`) + '#admins');
+    }
+
+    match = pathname.match(/^\/admin\/admins\/(\d+)\/delete$/);
+    if (match && method === 'POST') {
+      const target = await db.getUserById(match[1]);
+      if (!target || target.role !== 'admin') {
+        return redirect(res, '/admin?error=' + encodeURIComponent('管理者アカウントが見つかりません') + '#admins');
+      }
+      if (target.id === user.id) {
+        return redirect(res, '/admin?error=' + encodeURIComponent('自分自身のアカウントは削除できません') + '#admins');
+      }
+      if ((await db.getAllAdmins()).length <= 1) {
+        return redirect(res, '/admin?error=' + encodeURIComponent('管理者が1人もいなくなるため削除できません') + '#admins');
+      }
+      // 削除した人がログインしたままにならないよう、先にログインを終了させる
+      await db.destroySessionsForUser(target.id);
+      await db.deleteUser(target.id);
+      return redirect(res, '/admin?message=' + encodeURIComponent(`管理者「${target.name}」を削除しました`) + '#admins');
+    }
+
+    // 管理者が自分のパスワードを変更する(現在のパスワードの確認つき)
+    if (pathname === '/admin/password' && method === 'POST') {
+      const body = await parseBody(req);
+      const me = await db.getUserById(user.id);
+      if (!me || !crypto.verifyPassword(body.currentPassword || '', me.passwordHash)) {
+        return redirect(res, '/admin?error=' + encodeURIComponent('現在のパスワードが違います') + '#admins');
+      }
+      if (!body.newPassword || body.newPassword.length < 4) {
+        return redirect(res, '/admin?error=' + encodeURIComponent('新しいパスワードは4文字以上にしてください') + '#admins');
+      }
+      await db.updateUserPassword(user.id, crypto.hashPassword(body.newPassword));
+      return redirect(res, '/admin?message=' + encodeURIComponent('パスワードを変更しました') + '#admins');
     }
 
     match = pathname.match(/^\/admin\/members\/(\d+)\/reset-password$/);
@@ -445,6 +712,13 @@ const server = http.createServer(async (req, res) => {
       return redirect(res, '/admin?message=' + encodeURIComponent('特典を渡した記録を追加しました'));
     }
 
+    match = pathname.match(/^\/admin\/members\/(\d+)\/messages\/count$/);
+    if (match && method === 'GET') {
+      const msgs = await db.getMessagesForMember(match[1]);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ count: msgs.length, lastId: msgs.length ? msgs[msgs.length - 1].id : 0 }));
+    }
+
     match = pathname.match(/^\/admin\/members\/(\d+)\/messages$/);
     if (match && method === 'POST') {
       const body = await parseBody(req);
@@ -457,8 +731,21 @@ const server = http.createServer(async (req, res) => {
           body: text,
           createdAt: stats.nowStr(),
         });
+        // 管理者からの返信は、その会員に通知する
+        // badgeCount: 会員側は「未読あり/なし」のみの概念なので1で立てる(会員ページを開くと0に戻る)
+        const memberIdForPush = match[1];
+        db.getPushSubscriptionsForUser(memberIdForPush)
+          .then((subs) =>
+            sendPushToSubscriptions(subs, {
+              title: '📩 アドバイザーからメッセージ',
+              body: text,
+              badgeCount: 1,
+              url: '/member#messages',
+            })
+          )
+          .catch((err) => console.error('プッシュ通知の準備に失敗しました:', err));
       }
-      return redirect(res, `/admin/member/${match[1]}`);
+      return redirect(res, `/admin/member/${match[1]}#messages`);
     }
 
     match = pathname.match(/^\/admin\/members\/(\d+)\/messages\/(\d+)\/delete$/);
@@ -469,7 +756,7 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(403);
         return res.end('権限がありません');
       }
-      return redirect(res, `/admin/member/${match[1]}`);
+      return redirect(res, `/admin/member/${match[1]}#messages`);
     }
 
     match = pathname.match(/^\/admin\/members\/(\d+)\/media\/video$/);
@@ -482,10 +769,10 @@ const server = http.createServer(async (req, res) => {
         try {
           await db.addMemberMedia(match[1], { type: 'video', title, url: videoUrl, note, createdAt: stats.nowStr() });
         } catch (err) {
-          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message)}`);
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message)}#video`);
         }
       }
-      return redirect(res, `/admin/member/${match[1]}`);
+      return redirect(res, `/admin/member/${match[1]}#video`);
     }
 
     match = pathname.match(/^\/admin\/members\/(\d+)\/media\/image$/);
@@ -499,15 +786,15 @@ const server = http.createServer(async (req, res) => {
         const note = (fields.note || '').trim();
         const file = files.image;
         if (!title || !file || !file.content || !file.content.length) {
-          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('タイトルと画像ファイルを指定してください')}`);
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('タイトルと画像ファイルを指定してください')}#video`);
         }
         if (file.content.length > MAX_IMAGE_BYTES) {
-          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('画像は5MBまでです')}`);
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('画像は5MBまでです')}#video`);
         }
         const ext = (file.filename.split('.').pop() || '').toLowerCase();
         const mimeType = ALLOWED_TYPES[file.contentType] ? file.contentType : EXT_TYPE[ext];
         if (!mimeType) {
-          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('対応していない画像形式です(jpg/png/webp/gifのみ)')}`);
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('対応していない画像形式です(jpg/png/webp/gifのみ)')}#video`);
         }
         await db.addMemberMedia(match[1], {
           type: 'image',
@@ -518,9 +805,9 @@ const server = http.createServer(async (req, res) => {
           createdAt: stats.nowStr(),
         });
       } catch (err) {
-        return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message || '画像の登録に失敗しました')}`);
+        return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message || '画像の登録に失敗しました')}#video`);
       }
-      return redirect(res, `/admin/member/${match[1]}`);
+      return redirect(res, `/admin/member/${match[1]}#video`);
     }
 
     match = pathname.match(/^\/admin\/members\/(\d+)\/media\/html$/);
@@ -531,14 +818,14 @@ const server = http.createServer(async (req, res) => {
         const title = (fields.title || '').trim();
         const file = files.htmlFile;
         if (!title || !file || !file.content || !file.content.length) {
-          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('タイトルとHTMLファイルを指定してください')}`);
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('タイトルとHTMLファイルを指定してください')}#video`);
         }
         if (file.content.length > MAX_HTML_BYTES) {
-          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('HTMLファイルは500KBまでです')}`);
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('HTMLファイルは500KBまでです')}#video`);
         }
         const ext = (file.filename.split('.').pop() || '').toLowerCase();
         if (ext !== 'html' && ext !== 'htm') {
-          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('.htmlファイルのみアップロードできます')}`);
+          return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent('.htmlファイルのみアップロードできます')}#video`);
         }
         await db.addMemberMedia(match[1], {
           type: 'html',
@@ -548,15 +835,15 @@ const server = http.createServer(async (req, res) => {
           createdAt: stats.nowStr(),
         });
       } catch (err) {
-        return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message || 'HTMLツールの登録に失敗しました')}`);
+        return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message || 'HTMLツールの登録に失敗しました')}#video`);
       }
-      return redirect(res, `/admin/member/${match[1]}`);
+      return redirect(res, `/admin/member/${match[1]}#video`);
     }
 
     match = pathname.match(/^\/admin\/members\/(\d+)\/media\/(\d+)\/delete$/);
     if (match && method === 'POST') {
       await db.removeMemberMedia(match[1], match[2]);
-      return redirect(res, `/admin/member/${match[1]}`);
+      return redirect(res, `/admin/member/${match[1]}#video`);
     }
 
     match = pathname.match(/^\/admin\/members\/(\d+)\/media\/(\d+)\/note$/);
@@ -568,7 +855,7 @@ const server = http.createServer(async (req, res) => {
       } catch (err) {
         // 対象が見つからない場合などは何もせず戻る
       }
-      return redirect(res, `/admin/member/${match[1]}`);
+      return redirect(res, `/admin/member/${match[1]}#video`);
     }
 
     // 会員が選ぶ専用トレーニング一覧の表示順を1つ上/下に入れ替える
@@ -576,10 +863,20 @@ const server = http.createServer(async (req, res) => {
     if (match && method === 'POST') {
       const body = await parseBody(req);
       const direction = body.direction === 'up' ? 'up' : 'down';
+      // ▲▼ボタンの並び替えスクリプト(fetch)からの呼び出しは、ページ全体を返さず結果だけ返して速くする
+      const fromScript = req.headers['x-requested-with'] === 'fetch';
       try {
         await db.moveMemberMedia(match[1], match[2], direction);
       } catch (err) {
-        // 対象が見つからない場合などは何もせず戻る
+        // 対象が見つからない場合などは何もせず戻る(スクリプトからの場合はエラーを返して画面を読み込み直させる)
+        if (fromScript) {
+          res.writeHead(500);
+          return res.end();
+        }
+      }
+      if (fromScript) {
+        res.writeHead(204);
+        return res.end();
       }
       return redirect(res, `/admin/member/${match[1]}`);
     }
@@ -740,9 +1037,9 @@ const server = http.createServer(async (req, res) => {
       try {
         await db.assignLibraryItemToMember(match[1], match[2], note, stats.nowStr());
       } catch (err) {
-        return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message)}`);
+        return redirect(res, `/admin/member/${match[1]}?error=${encodeURIComponent(err.message)}#video`);
       }
-      return redirect(res, `/admin/member/${match[1]}`);
+      return redirect(res, `/admin/member/${match[1]}#video`);
     }
 
     if (pathname === '/admin/backup' && method === 'GET') {
@@ -780,7 +1077,15 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(404);
         return res.end('会員が見つかりません');
       }
-      const checkinRecords = await db.getCheckinsForUser(member.id);
+      // 互いに関係ない読み込みはまとめて並行実行する(1つずつ順番に待つと遅くなるため)
+      const [checkinRecords, hadUnreadMessages, adminViewMessages, media, library, categories] = await Promise.all([
+        db.getCheckinsForUser(member.id),
+        db.hasUnreadMessages(member.id, 'admin', user.id),
+        db.getMessagesForMember(member.id),
+        db.getMediaForMember(member.id),
+        db.getLibrary(),
+        db.getLibraryCategories(),
+      ]);
       const checkins = checkinRecords.map((c) => c.date);
       const memberStreak = stats.currentStreak(checkins);
       const monthlyStreak = stats.currentMonthlyStreak(checkins);
@@ -788,9 +1093,7 @@ const server = http.createServer(async (req, res) => {
       const given = member.rewardsGiven || 0;
       const viewMonth = resolveViewMonth(url);
       const currentMonth = stats.monthKey(stats.todayStr());
-      const hadUnreadMessages = await db.hasUnreadMessages(member.id, 'admin');
-      const adminViewMessages = await db.getMessagesForMember(member.id);
-      if (hadUnreadMessages) await db.markMessagesRead(member.id, 'admin');
+      if (hadUnreadMessages) await db.markMessagesRead(member.id, 'admin', user.id);
       return sendHtml(
         res,
         200,
@@ -817,9 +1120,9 @@ const server = http.createServer(async (req, res) => {
           checkinRecords,
           badgeLog: stats.badgeUnlockLog(checkins),
           messages: adminViewMessages,
-          media: await db.getMediaForMember(member.id),
-          library: await db.getLibrary(),
-          categories: await db.getLibraryCategories(),
+          media,
+          library,
+          categories,
           videoError: url.searchParams.get('error'),
         })
       );
@@ -828,7 +1131,7 @@ const server = http.createServer(async (req, res) => {
 
   res.writeHead(404);
   res.end('Not found');
-});
+}
 
 (async () => {
   try {
