@@ -63,18 +63,28 @@ async function sendPushToSubscriptions(subscriptions, payload) {
 // 自動バックアップを1日1回だけ確認するためのプロセス内キャッシュ(毎リクエストDBに問い合わせないようにする)
 let lastBackupCheckDate = null;
 
-// 初回起動時に管理者アカウントがなければ自動で作る
+const DEFAULT_ADMIN_USERNAME = 'undogenkiclub';
+
+// 起動時の管理者アカウントの確認
 // (Renderなどshellが使えないホスティング環境でも、npm run seedを手動実行しなくて済むように)
 async function ensureDefaultAdmin() {
-  const existing = await db.getUserByUsername('admin');
-  if (!existing) {
+  // 1人目の管理者のユーザー名を「admin」から「undogenkiclub」に変更する(2026-10。パスワードはそのまま)
+  const legacy = await db.getUserByUsername('admin');
+  if (legacy && legacy.role === 'admin' && !(await db.getUserByUsername(DEFAULT_ADMIN_USERNAME))) {
+    await db.updateUsername(legacy.id, DEFAULT_ADMIN_USERNAME);
+    console.log(`管理者のユーザー名を admin から ${DEFAULT_ADMIN_USERNAME} に変更しました`);
+  }
+  // 管理者が1人もいない時(初回起動)だけ初期の管理者アカウントを作る。
+  // (特定のユーザー名の有無で判断すると、ユーザー名を変えた後に初期パスワードのアカウントが復活してしまうため)
+  const admins = await db.getAllAdmins();
+  if (!admins.length) {
     await db.createUser({
       name: '管理者',
-      username: 'admin',
+      username: DEFAULT_ADMIN_USERNAME,
       passwordHash: crypto.hashPassword('admin123'),
       role: 'admin',
     });
-    console.log('初回起動: 管理者アカウントを自動作成しました (username: admin / password: admin123)');
+    console.log(`初回起動: 管理者アカウントを自動作成しました (username: ${DEFAULT_ADMIN_USERNAME} / password: admin123)`);
     console.log('※ ログイン後、必ずパスワードを変更してください');
   }
 }
@@ -382,16 +392,27 @@ async function handleRequest(req, res) {
         createdAt: stats.nowStr(),
       });
       // 会員からのメッセージは、管理者(全員)に通知する
-      // badgeCount: アイコンの赤丸に表示する数(未読のある会員の人数。管理画面の表示件数と揃える)
-      Promise.all([db.getPushSubscriptionsForRole('admin'), db.getMembersWithUnreadMessages()])
-        .then(([subs, unreadMembers]) =>
-          sendPushToSubscriptions(subs, {
-            title: `📩 ${user.name}さんからメッセージ`,
-            body: text,
-            url: `/admin/member/${user.id}#messages`,
-            badgeCount: unreadMembers.length,
-          })
-        )
+      // badgeCount: アイコンの赤丸に表示する数(未読のある会員の人数。管理画面の表示件数と揃える)。
+      // 既読は管理者ごとに別々なので、赤丸の数も管理者ごとに数えて送る
+      db.getPushSubscriptionsForRole('admin')
+        .then((subs) => {
+          const subsByAdmin = new Map();
+          subs.forEach((s) => {
+            if (!subsByAdmin.has(s.userId)) subsByAdmin.set(s.userId, []);
+            subsByAdmin.get(s.userId).push(s);
+          });
+          return Promise.all(
+            Array.from(subsByAdmin.entries()).map(async ([adminId, adminSubs]) => {
+              const unreadMembers = await db.getMembersWithUnreadMessages(adminId);
+              return sendPushToSubscriptions(adminSubs, {
+                title: `📩 ${user.name}さんからメッセージ`,
+                body: text,
+                url: `/admin/member/${user.id}#messages`,
+                badgeCount: unreadMembers.length,
+              });
+            })
+          );
+        })
         .catch((err) => console.error('プッシュ通知の準備に失敗しました:', err));
     }
     return redirect(res, '/member#messages');
@@ -537,12 +558,13 @@ async function handleRequest(req, res) {
 
     if (pathname === '/admin' && method === 'GET') {
       // 会員+チェックイン履歴は1回だけ取得して、進捗表とランキングの両方で使い回す(重複取得しない)
-      const [membersWithCheckins, unreadMembers, settings, backups, memberPushSubs] = await Promise.all([
+      const [membersWithCheckins, unreadMembers, settings, backups, memberPushSubs, admins] = await Promise.all([
         getMembersWithCheckins(),
-        db.getMembersWithUnreadMessages(),
+        db.getMembersWithUnreadMessages(user.id),
         db.getSettings(),
         db.listBackups(),
         db.getPushSubscriptionsForRole('member'),
+        db.getAllAdmins(),
       ]);
       // 通知をONにしている(=プッシュ購読が1件以上ある)会員のID一覧。声かけの目安として管理画面に表示する
       const pushEnabledMemberIds = new Set(memberPushSubs.map((s) => Number(s.userId)));
@@ -584,6 +606,8 @@ async function handleRequest(req, res) {
           rankUpMessages: settings.rankUpMessages,
           backups,
           pushEnabledMemberIds,
+          admins,
+          currentUserId: user.id,
         })
       );
     }
@@ -608,8 +632,60 @@ async function handleRequest(req, res) {
 
     let match = pathname.match(/^\/admin\/members\/(\d+)\/delete$/);
     if (match && method === 'POST') {
+      await db.destroySessionsForUser(match[1]);
       await db.deleteUser(match[1]);
       return redirect(res, '/admin?message=' + encodeURIComponent('削除しました'));
+    }
+
+    // --- 管理者アカウント(既読はアカウントごとに管理するので、管理者は1人1アカウントずつ使う) ---
+    if (pathname === '/admin/admins' && method === 'POST') {
+      const body = await parseBody(req);
+      const name = (body.name || '').trim();
+      const username = (body.username || '').trim();
+      const password = body.password || '';
+      if (!name || !username || !password) {
+        return redirect(res, '/admin?error=' + encodeURIComponent('すべての項目を入力してください') + '#admins');
+      }
+      if (password.length < 4) {
+        return redirect(res, '/admin?error=' + encodeURIComponent('パスワードは4文字以上にしてください') + '#admins');
+      }
+      if (await db.getUserByUsername(username)) {
+        return redirect(res, '/admin?error=' + encodeURIComponent('そのユーザー名は既に使われています') + '#admins');
+      }
+      await db.createUser({ name, username, passwordHash: crypto.hashPassword(password), role: 'admin' });
+      return redirect(res, '/admin?message=' + encodeURIComponent(`管理者「${name}」を追加しました`) + '#admins');
+    }
+
+    match = pathname.match(/^\/admin\/admins\/(\d+)\/delete$/);
+    if (match && method === 'POST') {
+      const target = await db.getUserById(match[1]);
+      if (!target || target.role !== 'admin') {
+        return redirect(res, '/admin?error=' + encodeURIComponent('管理者アカウントが見つかりません') + '#admins');
+      }
+      if (target.id === user.id) {
+        return redirect(res, '/admin?error=' + encodeURIComponent('自分自身のアカウントは削除できません') + '#admins');
+      }
+      if ((await db.getAllAdmins()).length <= 1) {
+        return redirect(res, '/admin?error=' + encodeURIComponent('管理者が1人もいなくなるため削除できません') + '#admins');
+      }
+      // 削除した人がログインしたままにならないよう、先にログインを終了させる
+      await db.destroySessionsForUser(target.id);
+      await db.deleteUser(target.id);
+      return redirect(res, '/admin?message=' + encodeURIComponent(`管理者「${target.name}」を削除しました`) + '#admins');
+    }
+
+    // 管理者が自分のパスワードを変更する(現在のパスワードの確認つき)
+    if (pathname === '/admin/password' && method === 'POST') {
+      const body = await parseBody(req);
+      const me = await db.getUserById(user.id);
+      if (!me || !crypto.verifyPassword(body.currentPassword || '', me.passwordHash)) {
+        return redirect(res, '/admin?error=' + encodeURIComponent('現在のパスワードが違います') + '#admins');
+      }
+      if (!body.newPassword || body.newPassword.length < 4) {
+        return redirect(res, '/admin?error=' + encodeURIComponent('新しいパスワードは4文字以上にしてください') + '#admins');
+      }
+      await db.updateUserPassword(user.id, crypto.hashPassword(body.newPassword));
+      return redirect(res, '/admin?message=' + encodeURIComponent('パスワードを変更しました') + '#admins');
     }
 
     match = pathname.match(/^\/admin\/members\/(\d+)\/reset-password$/);
@@ -1004,7 +1080,7 @@ async function handleRequest(req, res) {
       // 互いに関係ない読み込みはまとめて並行実行する(1つずつ順番に待つと遅くなるため)
       const [checkinRecords, hadUnreadMessages, adminViewMessages, media, library, categories] = await Promise.all([
         db.getCheckinsForUser(member.id),
-        db.hasUnreadMessages(member.id, 'admin'),
+        db.hasUnreadMessages(member.id, 'admin', user.id),
         db.getMessagesForMember(member.id),
         db.getMediaForMember(member.id),
         db.getLibrary(),
@@ -1017,7 +1093,7 @@ async function handleRequest(req, res) {
       const given = member.rewardsGiven || 0;
       const viewMonth = resolveViewMonth(url);
       const currentMonth = stats.monthKey(stats.todayStr());
-      if (hadUnreadMessages) await db.markMessagesRead(member.id, 'admin');
+      if (hadUnreadMessages) await db.markMessagesRead(member.id, 'admin', user.id);
       return sendHtml(
         res,
         200,

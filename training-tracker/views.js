@@ -606,7 +606,7 @@ function adminTopbar(label, backHref = '') {
       <a href="/board">💬 みんなの掲示板</a>
       ${PUSH_ENABLE_BUTTON}
       ${ADMIN_REFRESH_BTN}
-      <form method="POST" action="/logout"><button type="submit">ログアウト</button></form>
+      <form method="POST" action="/logout" onsubmit="return confirm(&#39;ログアウトしますか？&#39;);"><button type="submit">ログアウト</button></form>
     </div>
   </div>`;
 }
@@ -632,7 +632,7 @@ function topbar(label, showLogout = true, showSiteTitle = false, settingsMenu = 
     </span>
     <div class="topbar-actions">
       <a href="/guide">📖 使い方ガイド</a>
-      ${showLogout ? `<form method="POST" action="/logout"><button type="submit">ログアウト</button></form>` : ''}
+      ${showLogout ? `<form method="POST" action="/logout" onsubmit="return confirm(&#39;ログアウトしますか？&#39;);"><button type="submit">ログアウト</button></form>` : ''}
     </div>
   </div>`;
 }
@@ -671,6 +671,7 @@ function guidePage(userRole) {
   const adminItems = userRole === 'admin'
     ? [
         guideItem('👤 会員の追加', 'ダッシュボード下部の「会員を追加」から、名前・ユーザー名・初期パスワードを入力して登録します。ユーザー名とパスワードは会員本人に伝えてください。'),
+        guideItem('🔐 管理者アカウント', 'ダッシュボード一番下の「管理者アカウント」から、スタッフ用の管理者アカウントを追加・削除できます。メッセージ通知の既読はアカウントごとに別々なので、管理者は1人1つずつ使ってください。自分のパスワードもここから変更できます。'),
         guideItem('📋 会員詳細ページ', '会員一覧の「詳細」から個別ページに移動できます。進捗の確認、専用トレーニングの登録、メッセージのやり取りはすべてここから行います。'),
         guideItem('🎥 専用トレーニングの登録', '会員詳細ページから動画(YouTubeリンクなど)・画像・呼吸法などのHTMLツールを追加できます。▲▼ボタンで表示順を入れ替えたり、「セット数・回数を編集」からメモ(例: 3セット×10回)を追加・修正できます。'),
         guideItem('🎥📷 素材ライブラリ', 'よく使う動画・画像をあらかじめ登録しておける置き場です。会員ごとに毎回アップロードし直さなくても、ライブラリから選んで配布できます。'),
@@ -1201,7 +1202,7 @@ function memberPage({
               <button class="btn" type="submit">表示名を保存</button>
             </form>
             <a class="btn" href="/member/password">パスワード変更</a>
-            <form method="POST" action="/logout"><button class="btn" type="submit">ログアウト</button></form>
+            <form method="POST" action="/logout" onsubmit="return confirm(&#39;ログアウトしますか？&#39;);"><button class="btn" type="submit">ログアウト</button></form>
           </div>
         </details>
         <a href="/board" style="font-size:1rem;color:var(--primary);text-decoration:none;white-space:nowrap;">💬 みんなの掲示板</a>
@@ -1213,7 +1214,7 @@ function memberPage({
 function memberPasswordPage({ userName, error, message }) {
   return layout({
     title: 'パスワード変更 | オンライン運動元気倶楽部',
-    topbar: `<div class="topbar"><span class="brand"><a href="/member">&larr; 戻る</a></span><div class="topbar-actions"><a href="/guide">📖 使い方ガイド</a><form method="POST" action="/logout"><button type="submit">ログアウト</button></form></div></div>`,
+    topbar: `<div class="topbar"><span class="brand"><a href="/member">&larr; 戻る</a></span><div class="topbar-actions"><a href="/guide">📖 使い方ガイド</a><form method="POST" action="/logout" onsubmit="return confirm(&#39;ログアウトしますか？&#39;);"><button type="submit">ログアウト</button></form></div></div>`,
     body: `
     ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
     <div class="card">
@@ -1231,7 +1232,7 @@ function memberPasswordPage({ userName, error, message }) {
   });
 }
 
-function adminPage({ members, ranked, error, message, unreadMembers = [], rankUpMessages = {}, backups = [], pushEnabledMemberIds = new Set() }) {
+function adminPage({ members, ranked, error, message, unreadMembers = [], rankUpMessages = {}, backups = [], pushEnabledMemberIds = new Set(), admins = [], currentUserId = null }) {
   // 会員一覧の名前の横にも、新着メッセージがある会員には📩マークを出す(上のバナーだけだと見落としやすいため)
   const unreadMemberIds = new Set(unreadMembers.map((m) => m.id));
   const membersWithoutPush = members.filter((m) => !pushEnabledMemberIds.has(m.id));
@@ -1373,8 +1374,57 @@ function adminPage({ members, ranked, error, message, unreadMembers = [], rankUp
             </div>`
           : `<p style="font-size:0.85rem;color:var(--muted);margin:0;">自動バックアップはまだありません(アクセスすると当日分が作成されます)</p>`
       }
-    </div>`,
+    </div>
+
+    ${adminAccountsCardHtml(admins, currentUserId)}`,
   });
+}
+
+// 管理者アカウントの一覧・追加・削除と、自分のパスワード変更(管理者ダッシュボードの一番下)
+// 通知の既読はアカウントごとに管理しているので、管理者は1人1アカウントずつ使ってもらう
+function adminAccountsCardHtml(admins, currentUserId) {
+  const rows = admins
+    .map((a) => {
+      const isMe = a.id === currentUserId;
+      const action = isMe
+        ? '<span class="badge good">ログイン中のあなた</span>'
+        : admins.length > 1
+        ? `<form method="POST" action="/admin/admins/${a.id}/delete" onsubmit="return confirm(&#39;管理者「${escapeHtml(a.name)}」を削除しますか？この人は管理画面にログインできなくなります。&#39;);" style="margin:0;"><button class="btn danger" type="submit">削除</button></form>`
+        : '';
+      return `<tr><td>${escapeHtml(a.name)}</td><td>${escapeHtml(a.username)}</td><td>${action}</td></tr>`;
+    })
+    .join('');
+  return `
+    <div class="card" id="admins">
+      <h3>👤 管理者アカウント</h3>
+      <p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">
+        管理画面にログインできるアカウントです。メッセージ通知の既読はアカウントごとに別々なので、管理者は1人1つずつアカウントを使ってください。
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>名前</th><th>ユーザー名</th><th></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <details style="margin-top:14px;">
+        <summary style="cursor:pointer;color:var(--primary);font-weight:600;">＋ 管理者を追加</summary>
+        <form method="POST" action="/admin/admins" class="inline-form" style="margin-top:10px;">
+          <div class="form-row"><label>名前</label><input type="text" name="name" required maxlength="40" placeholder="例: 山田 花子"></div>
+          <div class="form-row"><label>ユーザー名(ログイン用)</label><input type="text" name="username" required maxlength="40" autocomplete="off"></div>
+          <div class="form-row"><label>初期パスワード(4文字以上)</label><input type="text" name="password" required minlength="4" autocomplete="off"></div>
+          <button class="btn primary" type="submit">管理者を追加</button>
+        </form>
+        <p style="font-size:0.8rem;color:var(--muted);margin:8px 0 0;">追加した人には、ユーザー名と初期パスワードを伝えてください。ログイン後、下の「自分のパスワードを変更」から変えてもらえます。</p>
+      </details>
+      <details style="margin-top:12px;">
+        <summary style="cursor:pointer;color:var(--primary);font-weight:600;">🔑 自分のパスワードを変更</summary>
+        <form method="POST" action="/admin/password" class="inline-form" style="margin-top:10px;">
+          <div class="form-row"><label>現在のパスワード</label><input type="password" name="currentPassword" required autocomplete="current-password"></div>
+          <div class="form-row"><label>新しいパスワード(4文字以上)</label><input type="password" name="newPassword" required minlength="4" autocomplete="new-password"></div>
+          <button class="btn primary" type="submit">変更する</button>
+        </form>
+      </details>
+    </div>`;
 }
 
 function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGrid, prevMonthKey, nextMonthKey, calendarBasePath, weekly, monthCount, monthlyStreak, monthlySeries, rewardsEarned, rewardsGiven, rewardsPending, badges, checkinDates, checkinRecords, badgeLog, messages, media, library, categories, videoError, hadUnreadMessages }) {

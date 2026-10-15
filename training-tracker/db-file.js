@@ -115,6 +115,13 @@ function destroySession(id) {
   save(data);
 }
 
+// その人のログインを全て終了させる(アカウントを削除した時に、削除済みの人がログインしたまま操作できないようにする)
+function destroySessionsForUser(userId) {
+  const data = load();
+  data.sessions = (data.sessions || []).filter((s) => !(s.user && s.user.id === Number(userId)));
+  save(data);
+}
+
 // --- users ---
 function getUserByUsername(username) {
   return load().users.find(u => u.username === username);
@@ -126,6 +133,21 @@ function getUserById(id) {
 
 function getAllMembers() {
   return load().users.filter(u => u.role === 'member');
+}
+
+// 管理者アカウントの一覧(管理画面の「管理者アカウント」欄で使う。登録順)
+function getAllAdmins() {
+  return load().users.filter((u) => u.role === 'admin').sort((a, b) => a.id - b.id);
+}
+
+function updateUsername(id, username) {
+  const data = load();
+  const user = data.users.find((u) => u.id === Number(id));
+  if (user) {
+    user.username = username;
+    save(data);
+  }
+  return user;
 }
 
 function createUser({ name, username, passwordHash, role }) {
@@ -453,33 +475,41 @@ function getMessagesForMember(memberId) {
     .sort((a, b) => a.id - b.id);
 }
 
-// readerRoleから見て「相手」が送った未読メッセージがあるか(会員ページ・管理者の会員詳細ページの通知に使う)
-function hasUnreadMessages(memberId, readerRole) {
-  const otherRole = readerRole === 'admin' ? 'member' : 'admin';
-  return load().messages.some(
-    (m) => m.memberId === Number(memberId) && m.senderRole === otherRole && m.read === false
-  );
+// 未読かどうか。会員発信のメッセージは管理者ごとに既読を管理する(readByに既読にした管理者のIDを入れる)ので、
+// 管理者が複数いても、1人が開いただけで他の管理者の通知が消えることはない。
+// (readはこの仕組みより前に既読になったメッセージの印。read:trueのものは全管理者にとって既読扱い)
+function isUnreadFor(m, readerRole, readerId) {
+  if (m.read !== false) return false;
+  if (readerRole === 'admin') {
+    return m.senderRole === 'member' && !(m.readBy || []).includes(Number(readerId));
+  }
+  return m.senderRole === 'admin';
 }
 
-// readerRoleから見て「相手」が送った未読メッセージを全て既読にする(会員ページ・管理者の会員詳細ページを開いた時に呼ぶ)
-function markMessagesRead(memberId, readerRole) {
-  const otherRole = readerRole === 'admin' ? 'member' : 'admin';
+// readerRole(とreaderId)から見て「相手」が送った未読メッセージがあるか(会員ページ・管理者の会員詳細ページの通知に使う)
+function hasUnreadMessages(memberId, readerRole, readerId) {
+  return load().messages.some((m) => m.memberId === Number(memberId) && isUnreadFor(m, readerRole, readerId));
+}
+
+// readerRole(とreaderId)から見て「相手」が送った未読メッセージを全て既読にする(会員ページ・管理者の会員詳細ページを開いた時に呼ぶ)
+function markMessagesRead(memberId, readerRole, readerId) {
   const data = load();
   let changed = false;
   data.messages.forEach((m) => {
-    if (m.memberId === Number(memberId) && m.senderRole === otherRole && m.read === false) {
-      m.read = true;
+    if (m.memberId === Number(memberId) && isUnreadFor(m, readerRole, readerId)) {
+      if (readerRole === 'admin') m.readBy = [...(m.readBy || []), Number(readerId)];
+      else m.read = true;
       changed = true;
     }
   });
   if (changed) save(data);
 }
 
-// 管理者ダッシュボード用: 未読(会員発信)メッセージがある会員の一覧
-function getMembersWithUnreadMessages() {
+// 管理者ダッシュボード用: その管理者(adminId)にとって未読の会員発信メッセージがある会員の一覧
+function getMembersWithUnreadMessages(adminId) {
   const data = load();
   const memberIds = new Set(
-    data.messages.filter((m) => m.senderRole === 'member' && m.read === false).map((m) => m.memberId)
+    data.messages.filter((m) => isUnreadFor(m, 'admin', adminId)).map((m) => m.memberId)
   );
   return data.users.filter((u) => memberIds.has(u.id)).map((u) => ({ id: u.id, name: u.name }));
 }
@@ -651,11 +681,14 @@ function importRaw(jsonStr) {
 module.exports = {
   backend: 'file',
   createSession,
+  destroySessionsForUser,
   getSession,
   destroySession,
   getUserByUsername,
   getUserById,
   getAllMembers,
+  getAllAdmins,
+  updateUsername,
   createUser,
   updateUserPassword,
   updateUserDisplayName,

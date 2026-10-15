@@ -2,13 +2,13 @@
 const crypto = require('./crypto-utils');
 const db = require('./db');
 
-const ADMIN_USERNAME = 'admin';
+const ADMIN_USERNAME = 'undogenkiclub';
 const ADMIN_PASSWORD = 'admin123';
 
 (async () => {
   const existing = await db.getUserByUsername(ADMIN_USERNAME);
   if (existing) {
-    console.log('管理者アカウントは既に存在します(username: admin)');
+    console.log('管理者アカウントは既に存在します(username: undogenkiclub)');
   } else {
     await db.createUser({
       name: '管理者',

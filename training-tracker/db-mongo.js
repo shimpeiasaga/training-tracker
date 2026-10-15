@@ -90,6 +90,12 @@ async function destroySession(id) {
   await db.collection('sessions').deleteOne({ _id: id });
 }
 
+// その人のログインを全て終了させる(アカウントを削除した時に、削除済みの人がログインしたまま操作できないようにする)
+async function destroySessionsForUser(userId) {
+  const db = await getDb();
+  await db.collection('sessions').deleteMany({ 'user.id': Number(userId) });
+}
+
 // counters コレクションでオートインクリメントの整数IDを発行する
 async function nextSeq(name) {
   const db = await getDb();
@@ -139,6 +145,19 @@ async function getAllMembers() {
   const db = await getDb();
   const docs = await db.collection('users').find({ role: 'member' }).toArray();
   return docs.map(mapUser);
+}
+
+// 管理者アカウントの一覧(管理画面の「管理者アカウント」欄で使う。登録順)
+async function getAllAdmins() {
+  const db = await getDb();
+  const docs = await db.collection('users').find({ role: 'admin' }).sort({ _id: 1 }).toArray();
+  return docs.map(mapUser);
+}
+
+async function updateUsername(id, username) {
+  const db = await getDb();
+  await db.collection('users').updateOne({ _id: Number(id) }, { $set: { username } });
+  return getUserById(id);
 }
 
 async function createUser({ name, username, passwordHash, role }) {
@@ -514,32 +533,40 @@ async function addMessage({ memberId, senderRole, senderName, body, createdAt })
   return mapMessage(doc);
 }
 
-// readerRoleから見て「相手」が送った未読メッセージがあるか
-async function hasUnreadMessages(memberId, readerRole) {
+// 未読の条件。会員発信のメッセージは管理者ごとに既読を管理する(readByに既読にした管理者のIDを入れる)ので、
+// 管理者が複数いても、1人が開いただけで他の管理者の通知が消えることはない。
+// (readはこの仕組みより前に既読になったメッセージの印。read:trueのものは全管理者にとって既読扱い)
+function unreadFilter(readerRole, readerId) {
+  if (readerRole === 'admin') {
+    return { senderRole: 'member', read: false, readBy: { $ne: Number(readerId) } };
+  }
+  return { senderRole: 'admin', read: false };
+}
+
+// readerRole(とreaderId)から見て「相手」が送った未読メッセージがあるか
+async function hasUnreadMessages(memberId, readerRole, readerId) {
   const db = await getDb();
-  const otherRole = readerRole === 'admin' ? 'member' : 'admin';
   const count = await db.collection('messages').countDocuments({
     memberId: Number(memberId),
-    senderRole: otherRole,
-    read: false,
+    ...unreadFilter(readerRole, readerId),
   });
   return count > 0;
 }
 
-// readerRoleから見て「相手」が送った未読メッセージを全て既読にする
-async function markMessagesRead(memberId, readerRole) {
+// readerRole(とreaderId)から見て「相手」が送った未読メッセージを全て既読にする
+async function markMessagesRead(memberId, readerRole, readerId) {
   const db = await getDb();
-  const otherRole = readerRole === 'admin' ? 'member' : 'admin';
-  await db.collection('messages').updateMany(
-    { memberId: Number(memberId), senderRole: otherRole, read: false },
-    { $set: { read: true } }
-  );
+  const filter = { memberId: Number(memberId), ...unreadFilter(readerRole, readerId) };
+  const update = readerRole === 'admin'
+    ? { $addToSet: { readBy: Number(readerId) } }
+    : { $set: { read: true } };
+  await db.collection('messages').updateMany(filter, update);
 }
 
-// 管理者ダッシュボード用: 未読(会員発信)メッセージがある会員の一覧
-async function getMembersWithUnreadMessages() {
+// 管理者ダッシュボード用: その管理者(adminId)にとって未読の会員発信メッセージがある会員の一覧
+async function getMembersWithUnreadMessages(adminId) {
   const db = await getDb();
-  const memberIds = await db.collection('messages').distinct('memberId', { senderRole: 'member', read: false });
+  const memberIds = await db.collection('messages').distinct('memberId', unreadFilter('admin', adminId));
   if (!memberIds.length) return [];
   const docs = await db.collection('users').find({ _id: { $in: memberIds } }).toArray();
   return docs.map((u) => ({ id: u._id, name: u.name }));
@@ -865,11 +892,14 @@ module.exports = {
   backend: 'mongo',
   ensureIndexes,
   createSession,
+  destroySessionsForUser,
   getSession,
   destroySession,
   getUserByUsername,
   getUserById,
   getAllMembers,
+  getAllAdmins,
+  updateUsername,
   createUser,
   updateUserPassword,
   updateUserDisplayName,
