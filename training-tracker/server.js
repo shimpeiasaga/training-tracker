@@ -196,6 +196,14 @@ async function handleRequest(req, res) {
   const { sid, session } = await getCurrentSession(req);
   const user = session ? session.user : null;
 
+  // --- 入会を検討している人向けの紹介ページ(ログイン不要) ---
+  if (method === 'GET' && pathname === '/about') {
+    // OGP画像(LINEなどでURLを送った時のプレビュー)は絶対URLが必要なので、アクセスされたホスト名から組み立てる
+    const host = req.headers.host || '';
+    const proto = req.headers['x-forwarded-proto'] || (host.startsWith('localhost') ? 'http' : 'https');
+    return sendHtml(res, 200, views.landingPage({ loggedIn: !!user, origin: host ? `${proto}://${host}` : '' }));
+  }
+
   // --- ログイン画面 ---
   if (method === 'GET' && pathname === '/login') {
     if (user) return redirect(res, '/');

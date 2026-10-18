@@ -50,9 +50,6 @@ function mediaEmbedHtml(item, source = 'media') {
   return videoPlayerHtml(item);
 }
 
-// 番号表示用(①②③...)。MAX_MEMBER_MEDIAが10件までなので⑩まであれば足りる
-const CIRCLED_NUMS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
-
 // 会員ごとの動画・画像一覧(合わせて最大MAX_MEMBER_MEDIA件、deletable=trueで削除・メモ編集フォーム付き)
 function mediaListHtml(media, { deletable = false, memberId } = {}) {
   if (!media || !media.length) {
@@ -63,7 +60,7 @@ function mediaListHtml(media, { deletable = false, memberId } = {}) {
       (v, i) => `
       <div class="video-item">
         <div class="video-item-head">
-          <h4>${CIRCLED_NUMS[i] || i + 1} ${escapeHtml(v.title)}</h4>
+          <h4><span class="media-num">${i + 1}</span>${escapeHtml(v.title)}</h4>
           ${
             deletable
               ? `<div class="video-item-actions">
@@ -215,7 +212,7 @@ function layout({ title, body, script = '', topbar = '', extraScript = '' }) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)}</title>
-<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/style.css?v=20261015">
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" href="/icon-192.png">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -448,16 +445,12 @@ const PUSH_CLIENT_SCRIPT = `
 // 連打された場合も保存の順番が崩れないよう、保存リクエストは1件ずつ順番に送る。失敗した時だけ画面を読み込み直す
 const MEDIA_REORDER_SCRIPT = `
 (function () {
-  var CIRCLED = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
   var saveQueue = Promise.resolve();
   function renumber(list) {
     var items = list.querySelectorAll('.video-item');
     items.forEach(function (el, i) {
-      var h4 = el.querySelector('.video-item-head h4');
-      if (h4) {
-        var title = h4.textContent.replace(/^\\S+\\s/, '');
-        h4.textContent = (CIRCLED[i] || i + 1) + ' ' + title;
-      }
+      var num = el.querySelector('.video-item-head .media-num');
+      if (num) num.textContent = i + 1;
       var upBtn = el.querySelector('button[title="上に移動"]');
       var downBtn = el.querySelector('button[title="下に移動"]');
       if (upBtn) upBtn.disabled = i === 0;
@@ -758,6 +751,7 @@ function loginPage(error) {
           </div>
           <button class="btn primary" style="width:100%;padding:12px;" type="submit">ログイン</button>
         </form>
+        <p style="text-align:center;margin-top:16px;font-size:0.9rem;"><a href="/about" style="color:var(--primary);font-weight:600;">はじめての方へ(サービス紹介・お申し込み)</a></p>
       </div>
     </div>`,
   }).replace('<body>', '<body style="display:flex;min-height:100vh;">').replace('<div class="container">', '<div class="container" style="width:100%;display:flex;align-items:center;justify-content:center;">');
@@ -1765,4 +1759,260 @@ function boardPage({ posts, userRole, userName, userId, error }) {
   });
 }
 
-module.exports = { escapeHtml, loginPage, memberPage, memberPasswordPage, adminPage, adminMemberPage, adminLibraryPage, boardPage, guidePage };
+// ---------- 入会を検討している人向けの紹介ページ(/about、ログイン不要) ----------
+const ENTRY_URL = 'https://www.kaihipay.jp/forms?form_code=8641722881621490'; // お申し込みフォーム(会費ペイ)
+const CONTACT_EMAIL = 'undogenkiclub@gmail.com';
+
+function landingPage({ loggedIn = false, origin = '' } = {}) {
+  const features = [
+    ['▶️', '専用トレーニング動画・画像', 'あなた専用にカスタマイズされた動画・画像・呼吸法ツールで、いつでも自宅でトレーニングできます。'],
+    ['🏅', 'バッジコレクション', '継続日数に応じて、ビギナーからレジェンドまで7段階のバッジが貯まっていきます。'],
+    ['📅', '今月の目標&スタンプ特典', '月10回の目標を3ヶ月連続で達成すると、メニュー更新特典がもらえます。'],
+    ['💬', 'アドバイザーとのメッセージ', '不安や疑問は、いつでも専属アドバイザーに直接相談できます。'],
+    ['🏆', '今月のランキング', '上位3名が発表され、みんなで励まし合いながら続けられます。'],
+    ['📱', 'スマホでかんたん操作', 'チェックはワンタップ。履歴もカレンダーでひと目で確認できます。'],
+  ];
+  const steps = [
+    ['専用トレーニングをチェック', 'あなた専用の動画・画像・呼吸法ツールなどを、いつでも見返せます。'],
+    ['トレーニング完了をチェック', 'トップページの「トレーニング完了をチェック」ボタンを押すだけで、その日の記録が完了します。'],
+    ['カレンダーで履歴を確認・メモ', '実施した日がカレンダーでひと目で分かります。日付をタップすると、セット数・回数などのメモを残せます。'],
+    ['バッジコレクションに挑戦', '続けた日数に応じて、7段階のバッジが貯まっていきます。'],
+    ['今月の目標&メニュー更新特典', '月10回の目標を達成してスタンプを貯めましょう。3ヶ月連続達成でメニュー更新特典がもらえます。'],
+    ['アドバイザーとのメッセージ', '体調の変化や疑問点など、いつでも専属アドバイザーに相談・報告できます。'],
+    ['ランキング・みんなの掲示板', '今月のランキングやみんなの掲示板で、ほかの会員と励まし合いながら続けられます。'],
+  ];
+  const flow = [
+    ['お申し込み', 'このページの「お申し込みはこちら」ボタンから、申し込みフォームに進みます。'],
+    ['メニュー作成', '専属アドバイザーが、あなた専用のトレーニングメニューを作成します。'],
+    ['ログイン情報のお知らせ', 'ログイン用のユーザー名とパスワードをお知らせします。'],
+    ['スタート！', 'スマホでログインしたら準備完了。ホーム画面に追加すると、アプリのようにワンタップで開けます。'],
+  ];
+  const faqs = [
+    ['運動が苦手でも大丈夫ですか？', '大丈夫です。専属アドバイザーがあなたに合わせたメニューを用意します。動画や画像のお手本を見ながら、自宅で自分のペースで取り組めます。'],
+    ['アプリのインストールは必要ですか？', '不要です。スマホやパソコンのブラウザから使えます。ホーム画面に追加すると、アプリのようにワンタップで開けます。'],
+    ['続けられるか不安です。', '月10回の目標とスタンプ、バッジ、ランキングなど、楽しく続けられる工夫があります。困ったときはアドバイザーにメッセージで相談できます。'],
+    ['料金はいくらですか？', '月額3,300円(税込)です。'],
+  ];
+  const ogImage = origin ? `${origin}/icon-512.png` : '/icon-512.png';
+  const ctaButton = (label = 'お申し込みはこちら') =>
+    `<a class="lp-cta" href="${ENTRY_URL}" target="_blank" rel="noopener">${label}</a>`;
+
+  return `<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>オンライン運動元気倶楽部｜自宅で続けられる運動習慣</title>
+<meta name="description" content="専属アドバイザーがあなた専用のトレーニングメニューを用意。自宅で、あなたのペースで続けられるオンライン運動サービスです。月額3,300円(税込)。">
+<meta property="og:title" content="オンライン運動元気倶楽部">
+<meta property="og:description" content="自宅で、あなたのペースで。続けられる運動習慣を。専属アドバイザーがあなた専用のトレーニングメニューを用意します。">
+<meta property="og:type" content="website">
+<meta property="og:image" content="${escapeHtml(ogImage)}">
+<meta name="theme-color" content="#2563eb">
+<link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<style>
+  :root {
+    --primary: #2563eb; --primary-deep: #1e40af; --soft: #e8f0fe; --soft2: #f5f8ff;
+    --ink: #1e293b; --muted: #64748b; --line: #e2e8f0; --gold: #fbbf24; --red: #dc2626;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic", sans-serif; color: var(--ink); background: #fff; line-height: 1.75; }
+  a { color: var(--primary); }
+  .lp-wrap { max-width: 1040px; margin: 0 auto; padding: 0 20px; }
+  /* ヘッダー */
+  .lp-head { position: sticky; top: 0; z-index: 10; background: rgba(255,255,255,0.95); backdrop-filter: blur(6px); border-bottom: 1px solid var(--line); }
+  .lp-head .lp-wrap { display: flex; align-items: center; justify-content: space-between; height: 60px; gap: 12px; }
+  .lp-brand { display: flex; align-items: center; gap: 10px; font-weight: 800; color: var(--primary-deep); text-decoration: none; font-size: 1rem; white-space: nowrap; }
+  .lp-brand img { width: 36px; height: 36px; border-radius: 8px; }
+  .lp-login { font-size: 0.85rem; font-weight: 700; text-decoration: none; border: 1.5px solid var(--primary); color: var(--primary); padding: 6px 14px; border-radius: 999px; white-space: nowrap; }
+  /* ヒーロー */
+  .lp-hero { background: linear-gradient(160deg, var(--primary) 0%, var(--primary-deep) 100%); color: #fff; padding: 56px 0 64px; overflow: hidden; }
+  .lp-hero .lp-wrap { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 40px; align-items: center; }
+  .lp-hero h1 { font-size: clamp(1.7rem, 4.4vw, 2.6rem); line-height: 1.35; font-weight: 800; letter-spacing: 0.01em; }
+  .lp-hero p.lead { margin-top: 18px; font-size: 1.02rem; opacity: 0.95; }
+  .lp-hero-actions { margin-top: 28px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .lp-cta { display: inline-block; background: var(--gold); color: #3b2a00; font-weight: 800; text-decoration: none; padding: 15px 30px; border-radius: 999px; font-size: 1.05rem; box-shadow: 0 6px 18px rgba(0,0,0,0.18); transition: transform 0.15s; }
+  .lp-cta:hover { transform: translateY(-2px); }
+  .lp-sub-link { color: #fff; font-weight: 700; text-decoration: underline; text-underline-offset: 4px; font-size: 0.95rem; }
+  .lp-price-chip { margin-top: 22px; display: inline-block; background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.3); padding: 6px 14px; border-radius: 999px; font-size: 0.9rem; }
+  /* スマホ画面のイメージ */
+  .lp-phone { justify-self: center; width: 270px; background: #0f172a; border-radius: 34px; padding: 10px; box-shadow: 0 20px 50px rgba(0,0,0,0.35); }
+  .lp-phone-in { background: var(--soft2); border-radius: 26px; overflow: hidden; color: var(--ink); }
+  .ph-bar { background: var(--primary); color: #fff; font-size: 0.72rem; font-weight: 700; padding: 14px 14px 10px; }
+  .ph-body { padding: 12px; display: grid; gap: 8px; }
+  .ph-card { background: #fff; border-radius: 12px; padding: 10px; border: 1px solid var(--line); }
+  .ph-title { font-size: 0.72rem; font-weight: 800; color: var(--primary-deep); margin-bottom: 6px; }
+  .ph-item { display: flex; align-items: center; gap: 7px; font-size: 0.72rem; font-weight: 700; padding: 4px 0; }
+  .ph-item small { margin-left: auto; color: var(--muted); font-weight: 600; font-size: 0.64rem; }
+  .ph-num { flex: 0 0 auto; width: 18px; height: 18px; border-radius: 50%; background: var(--primary); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 0.6rem; }
+  .ph-btn { background: var(--primary); color: #fff; text-align: center; font-size: 0.74rem; font-weight: 800; padding: 10px; border-radius: 10px; }
+  .ph-stamps { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; margin-top: 4px; }
+  .ph-stamps span { aspect-ratio: 1; border-radius: 50%; border: 1.5px dashed #bfdbfe; }
+  .ph-stamps span.on { background: var(--primary); border: none; }
+  /* キャンペーン */
+  .nw { white-space: nowrap; }
+  /* セクション共通 */
+  section.lp-sec { padding: 72px 0; }
+  section.lp-sec.alt { background: var(--soft2); }
+  .lp-sec h2 { text-align: center; font-size: clamp(1.4rem, 3.4vw, 1.9rem); color: var(--primary-deep); font-weight: 800; }
+  .lp-sec .lp-sec-lead { text-align: center; color: var(--muted); margin: 10px auto 36px; max-width: 640px; }
+  /* 特徴 */
+  .lp-features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .lp-feature { background: #fff; border: 1px solid var(--line); border-radius: 18px; padding: 24px; }
+  .lp-feature .ic { width: 52px; height: 52px; border-radius: 50%; background: var(--soft); display: flex; align-items: center; justify-content: center; font-size: 1.5rem; margin-bottom: 12px; }
+  .lp-feature h3 { font-size: 1.05rem; margin-bottom: 6px; }
+  .lp-feature p { color: var(--muted); font-size: 0.92rem; }
+  /* 流れ */
+  .lp-flow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; counter-reset: flow; }
+  .lp-flow li { list-style: none; background: #fff; border-radius: 18px; padding: 22px 18px; border: 1px solid var(--line); position: relative; }
+  .lp-flow li::before { counter-increment: flow; content: "STEP " counter(flow); display: inline-block; background: var(--primary); color: #fff; font-weight: 800; font-size: 0.75rem; padding: 3px 10px; border-radius: 999px; margin-bottom: 10px; }
+  .lp-flow h3 { font-size: 1.02rem; margin-bottom: 4px; }
+  .lp-flow p { color: var(--muted); font-size: 0.9rem; }
+  /* 使い方 */
+  .lp-steps { max-width: 760px; margin: 0 auto; display: grid; gap: 12px; }
+  .lp-step { display: flex; gap: 14px; align-items: flex-start; background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 16px 18px; }
+  .lp-step .n { flex: 0 0 auto; width: 34px; height: 34px; border-radius: 50%; background: var(--primary); color: #fff; font-weight: 800; display: flex; align-items: center; justify-content: center; }
+  .lp-step h3 { font-size: 1rem; }
+  .lp-step p { color: var(--muted); font-size: 0.9rem; }
+  /* 料金 */
+  .lp-price { max-width: 620px; margin: 0 auto; background: #fff; border: 2px solid var(--primary); border-radius: 24px; padding: 36px 28px; text-align: center; }
+  .lp-price .amount { font-size: clamp(2rem, 6vw, 2.8rem); font-weight: 800; color: var(--ink); }
+  .lp-price .amount small { font-size: 1rem; font-weight: 700; color: var(--muted); }
+  .lp-price .note { color: var(--muted); font-size: 0.82rem; margin-top: 14px; }
+  /* よくある質問 */
+  .lp-faq { max-width: 760px; margin: 0 auto; display: grid; gap: 10px; }
+  .lp-faq details { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; }
+  .lp-faq summary { cursor: pointer; font-weight: 800; list-style: none; display: flex; gap: 10px; }
+  .lp-faq summary::before { content: "Q"; color: var(--primary); font-weight: 800; }
+  .lp-faq summary::-webkit-details-marker { display: none; }
+  .lp-faq details p { margin-top: 10px; color: var(--muted); padding-left: 22px; }
+  /* フッター */
+  .lp-final { background: linear-gradient(160deg, var(--primary) 0%, var(--primary-deep) 100%); color: #fff; text-align: center; padding: 64px 20px; }
+  .lp-final h2 { font-size: clamp(1.3rem, 3.4vw, 1.8rem); margin-bottom: 22px; }
+  footer.lp-foot { text-align: center; padding: 28px 20px 40px; color: var(--muted); font-size: 0.85rem; }
+  footer.lp-foot a { font-weight: 700; }
+  @media (max-width: 860px) {
+    .lp-hero .lp-wrap { grid-template-columns: 1fr; }
+    .lp-features { grid-template-columns: 1fr 1fr; }
+    .lp-flow { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 560px) {
+    .lp-hero { padding: 40px 0 48px; }
+    .lp-hero h1 { font-size: 1.5rem; }
+    .lp-sec h2 { font-size: 1.3rem; }
+    .lp-features, .lp-flow { grid-template-columns: 1fr; }
+    section.lp-sec { padding: 52px 0; }
+    .lp-brand span { font-size: 0.9rem; }
+    .lp-cta { width: 100%; text-align: center; }
+  }
+</style>
+</head>
+<body>
+<header class="lp-head">
+  <div class="lp-wrap">
+    <a class="lp-brand" href="/about"><img src="/icon-192.png" alt=""><span>オンライン運動元気倶楽部</span></a>
+    <a class="lp-login" href="/">${loggedIn ? 'マイページへ' : '会員ログイン'}</a>
+  </div>
+</header>
+
+<section class="lp-hero">
+  <div class="lp-wrap">
+    <div>
+      <h1>自宅で、あなたのペースで。<br>続けられる運動習慣を。</h1>
+      <p class="lead">オンライン運動元気倶楽部は、専属アドバイザーがあなた専用のトレーニングメニューを用意し、日々の記録をサポートするオンライン運動サービスです。バッジやランキングなど、楽しく続けられる工夫が満載です。</p>
+      <div class="lp-hero-actions">
+        ${ctaButton()}
+        <a class="lp-sub-link" href="#features">くわしく見る ↓</a>
+      </div>
+      <div class="lp-price-chip">月額 3,300円(税込)</div>
+    </div>
+    <div class="lp-phone" aria-hidden="true">
+      <div class="lp-phone-in">
+        <div class="ph-bar">オンライン運動元気倶楽部</div>
+        <div class="ph-body">
+          <div class="ph-card">
+            <div class="ph-title">花子さんの専用トレーニング</div>
+            <div class="ph-item"><span class="ph-num">1</span>呼吸法<small>1日3回</small></div>
+            <div class="ph-item"><span class="ph-num">2</span>前鋸筋トレーニング<small>10回×2</small></div>
+            <div class="ph-item"><span class="ph-num">3</span>股関節スクワット<small>10回×3</small></div>
+          </div>
+          <div class="ph-btn">✅ トレーニング完了をチェック</div>
+          <div class="ph-card">
+            <div class="ph-title">今月の目標🏋️(月10回)</div>
+            <div class="ph-stamps">${Array.from({ length: 10 }, (_, i) => `<span class="${i < 6 ? 'on' : ''}"></span>`).join('')}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<section class="lp-sec" id="features">
+  <div class="lp-wrap">
+    <h2>オンライン運動元気倶楽部の特徴</h2>
+    <p class="lp-sec-lead">一人ひとりに合わせたメニューと、続けたくなる仕組みで、無理なく運動習慣が身につきます。</p>
+    <div class="lp-features">
+      ${features.map(([ic, t, d]) => `<div class="lp-feature"><div class="ic">${ic}</div><h3>${t}</h3><p>${d}</p></div>`).join('')}
+    </div>
+  </div>
+</section>
+
+<section class="lp-sec alt" id="flow">
+  <div class="lp-wrap">
+    <h2>ご利用の流れ</h2>
+    <p class="lp-sec-lead">お申し込みから、かんたん4ステップではじめられます。</p>
+    <ol class="lp-flow">
+      ${flow.map(([t, d]) => `<li><h3>${t}</h3><p>${d}</p></li>`).join('')}
+    </ol>
+  </div>
+</section>
+
+<section class="lp-sec" id="howto">
+  <div class="lp-wrap">
+    <h2>使い方はかんたん</h2>
+    <p class="lp-sec-lead">ログインしたら、この7つを覚えるだけ。毎日続けやすい工夫が詰まっています。</p>
+    <div class="lp-steps">
+      ${steps.map(([t, d], i) => `<div class="lp-step"><span class="n">${i + 1}</span><div><h3>${t}</h3><p>${d}</p></div></div>`).join('')}
+    </div>
+  </div>
+</section>
+
+<section class="lp-sec alt" id="price">
+  <div class="lp-wrap">
+    <h2>料金</h2>
+    <p class="lp-sec-lead">わかりやすい月額制です。</p>
+    <div class="lp-price">
+      <div class="amount">月額 3,300円 <small>(税込)</small></div>
+      <div style="margin-top:24px;">${ctaButton('お申し込みフォームへ')}</div>
+      <p class="note">※ お申し込みフォーム(会費ペイ)が別のページで開きます</p>
+    </div>
+  </div>
+</section>
+
+<section class="lp-sec" id="faq">
+  <div class="lp-wrap">
+    <h2>よくある質問</h2>
+    <p class="lp-sec-lead">そのほかのご質問は、お気軽にメールでお問い合わせください。</p>
+    <div class="lp-faq">
+      ${faqs.map(([q, a]) => `<details><summary>${q}</summary><p>${a}</p></details>`).join('')}
+    </div>
+  </div>
+</section>
+
+<section class="lp-final">
+  <h2>今日から、自宅で運動習慣をはじめませんか？</h2>
+  ${ctaButton()}
+</section>
+
+<footer class="lp-foot">
+  <p>お問い合わせ: <a href="mailto:${CONTACT_EMAIL}">${CONTACT_EMAIL}</a></p>
+  <p style="margin-top:6px;">© オンライン運動元気倶楽部</p>
+</footer>
+</body>
+</html>`;
+}
+
+module.exports = { escapeHtml, loginPage, memberPage, memberPasswordPage, adminPage, adminMemberPage, adminLibraryPage, boardPage, guidePage, landingPage };
