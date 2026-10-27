@@ -240,8 +240,8 @@ ${extraScript ? `<script>${extraScript}</script>` : ''}
 
 // ボタンを押した直後、通信のラグで「押せているか分からない」状態を防ぐため、
 // 送信ボタンを一時的に無効化してテキストを変える(全ページ共通)。
-// メッセージ送信系のボタン(文言が「送信」)は「送信中...」、トレーニング完了チェックのボタンは
-// 記録する時は「記録中...」・取り消す時(checkedクラスが付いている)は「処理中...」、それ以外は「処理中...」にする
+// メッセージ送信系のボタン(文言が「送信」)は「送信中」、トレーニング完了チェックのボタンは
+// 記録する時は「記録中」・取り消す時(checkedクラスが付いている)は「処理中」、それ以外は「処理中」にする
 const BUTTON_LOADING_SCRIPT = `
 document.addEventListener('submit', function (e) {
   // confirm()で「キャンセル」された送信(削除確認など)はここでdefaultPreventedになるので何もしない。
@@ -255,10 +255,10 @@ document.addEventListener('submit', function (e) {
   btn.dataset.originalText = btn.textContent;
   var label = btn.textContent.trim();
   btn.textContent = label === '送信'
-    ? '送信中...'
+    ? '送信中'
     : btn.classList.contains('checkin-btn') && !btn.classList.contains('checked')
-    ? '記録中...'
-    : '処理中...';
+    ? '記録中'
+    : '処理中';
 });
 
 // フォームの送信ボタン以外(「詳細」などリンクの<a class="btn">、更新ボタン、
@@ -269,7 +269,7 @@ document.addEventListener('click', function (e) {
   link.dataset.loading = '1';
   var original = link.textContent;
   link.style.opacity = '0.6';
-  link.textContent = '読み込み中...';
+  link.textContent = '読み込み中';
   // ダウンロードリンクなどページ移動が起きないケースのために、少し経ったら元に戻す
   setTimeout(function () {
     link.style.opacity = '';
@@ -388,7 +388,7 @@ const PUSH_CLIENT_SCRIPT = `
   }
 
   window.enablePushNotifications = function (btn) {
-    if (btn) { btn.disabled = true; btn.textContent = '設定中...'; }
+    if (btn) { btn.disabled = true; btn.textContent = '設定中'; }
     fetch('/push/vapid-public-key')
       .then(function (r) { return r.json(); })
       .then(function (info) {
@@ -470,7 +470,7 @@ const MEDIA_REORDER_SCRIPT = `
     var sibling = direction === 'up' ? item.previousElementSibling : item.nextElementSibling;
     if (!sibling) return;
     e.preventDefault();
-    // ページを再読み込みしないため、共通のローディング表示(「処理中...」)をすぐ元の▲▼に戻す
+    // ページを再読み込みしないため、共通のローディング表示(「処理中」)をすぐ元の▲▼に戻す
     var btn = form.querySelector('button');
     if (btn && btn.dataset.originalText) btn.textContent = btn.dataset.originalText;
     // 先に画面上の順番を入れ替える(ボタンの有効/無効もここで付け直す)
@@ -573,7 +573,7 @@ const PULL_TO_REFRESH_SCRIPT = `
     if (!pulling) return;
     pulling = false;
     if (currentPull > threshold) {
-      indicator.textContent = '更新中...';
+      indicator.textContent = '更新中';
       indicator.style.height = '40px';
       indicator.style.opacity = '1';
       location.reload();
@@ -590,7 +590,7 @@ const PULL_TO_REFRESH_SCRIPT = `
 const PUSH_ENABLE_BUTTON = `<button type="button" id="push-enable-btn" class="btn" onclick="window.enablePushNotifications && enablePushNotifications(this)">🔔 通知を受け取る</button>`;
 
 // 管理画面の共通トップバー(更新ボタン付き)。backHrefを指定すると「← ラベル」のリンクになる
-const ADMIN_REFRESH_BTN = `<button type="button" class="btn" onclick="this.disabled=true;this.textContent='更新中...';location.reload();" title="最新の情報に更新します">🔄 更新</button>`;
+const ADMIN_REFRESH_BTN = `<button type="button" class="btn" onclick="this.disabled=true;this.textContent='更新中';location.reload();" title="最新の情報に更新します">🔄 更新</button>`;
 function adminTopbar(label, backHref = '') {
   return `<div class="topbar">
     <span class="brand">${backHref ? `<a href="${backHref}">&larr; ${escapeHtml(label)}</a>` : escapeHtml(label)}</span>
@@ -833,7 +833,7 @@ function historyListHtml(checkinRecords, { editable = false } = {}) {
           </summary>
           <form method="POST" action="/member/checkins/${c.date}/note" class="inline-form" style="margin-top:8px;">
             <div class="form-row">
-              <textarea name="note" rows="2" maxlength="300" placeholder="例: スクワット3セット×10回、ベンチプレス...">${escapeHtml(note)}</textarea>
+              <textarea name="note" rows="2" maxlength="300" placeholder="例: 今日は体が軽かった、肩まわりが少し張っている、呼吸が深くできて気持ちよかった など">${escapeHtml(note)}</textarea>
             </div>
             <button class="btn" type="submit">保存</button>
           </form>
@@ -1161,7 +1161,7 @@ function memberPage({
     </div>
 
     <div class="card" id="history">
-      <h3>実施した日</h3>
+      <h3>実施日(メモ機能)</h3>
       <p style="font-size:0.8rem;color:var(--muted);margin:0 0 8px;">日付をタップするとメモを自由に追加、編集できます</p>
       ${historyListHtml(checkinRecords, { editable: true })}
     </div>
@@ -1465,7 +1465,7 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
     </div>
 
     <div class="card">
-      <h3>実施した日</h3>
+      <h3>実施日(メモ機能)</h3>
       ${historyListHtml(checkinRecords)}
     </div>
 
