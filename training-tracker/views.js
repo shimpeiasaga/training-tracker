@@ -1225,11 +1225,11 @@ function memberPage({
     </div>
 
     <div class="card" id="calendar">
+      <h3>${formatMonthJa(monthKeyForGrid)}の実施日カレンダー・メモ</h3>
       <div class="stat-row">
         <div class="stat-box"><div class="num">${grid.filter((c) => c && c.checked).length}回</div><div class="label">${Number(monthKeyForGrid.slice(5))}月の実施回数</div></div>
         <div class="stat-box"><div class="num">${weekCount}/7</div><div class="label">今週の実施回数</div></div>
       </div>
-      <h3>${formatMonthJa(monthKeyForGrid)}の実施日カレンダー・メモ</h3>
       ${calendarNavHtml(calendarBasePath, prevMonthKey, nextMonthKey)}
       ${gridHtml(grid)}
       ${calendarHintHtml(grid, true)}
