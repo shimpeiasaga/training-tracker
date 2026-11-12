@@ -212,7 +212,7 @@ function layout({ title, body, script = '', topbar = '', extraScript = '' }) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)}</title>
-<link rel="stylesheet" href="/style.css?v=20261015">
+<link rel="stylesheet" href="/style.css?v=20261112">
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" href="/icon-192.png">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -973,26 +973,23 @@ function confettiScript(gold = false) {
 }
 
 function monthlyProgressHtml({ monthCount, monthGoal, monthlyStreak, rewardMonths }) {
-  const pct = Math.min(100, Math.round((monthCount / monthGoal) * 100));
   const achieved = monthCount >= monthGoal;
   const monthsToNextReward = achieved ? rewardMonths - (monthlyStreak % rewardMonths || rewardMonths) : null;
+  // 目標回数ぶんの丸を並べ、実施した回数だけ✓を入れる(紹介ページのイラストと同じ見た目)
+  const stamps = Array.from({ length: monthGoal }, (_, i) =>
+    i < monthCount ? '<span class="on">✓</span>' : '<span></span>').join('');
   return `
-    <div class="stat-row">
-      <div class="stat-box"><div class="num">${monthCount}/${monthGoal}</div><div class="label">今月の実施回数</div></div>
-      <div class="stat-box"><div class="num">${monthlyStreak}</div><div class="label">目標達成 連続月数</div></div>
-    </div>
-    <div style="background:var(--border);border-radius:8px;height:14px;overflow:hidden;margin-bottom:10px;">
-      <div style="background:${achieved ? 'var(--primary)' : 'var(--primary-light)'};height:100%;width:${pct}%;"></div>
-    </div>
-    <p style="font-size:0.85rem;color:var(--muted);margin:0;">
-      ${
-        achieved
-          ? monthsToNextReward === 0
-            ? '今月で目標達成! 3ヶ月継続の特典ラインに到達しました 🎉'
-            : `今月の目標は達成済みです。あと${monthsToNextReward}ヶ月継続で特典がもらえます。`
-          : `今月あと${Math.max(0, monthGoal - monthCount)}回で目標達成です。`
-      }
-    </p>`;
+    <div class="goal-stamps" style="grid-template-columns:repeat(${monthGoal},1fr);">${stamps}</div>
+    <div class="goal-meta"><span>${monthCount} / ${monthGoal}回</span><b>${achieved ? '達成! 🎉' : `あと${monthGoal - monthCount}回!`}</b></div>
+    ${
+      achieved
+        ? `<p class="goal-note">${
+            monthsToNextReward === 0
+              ? '今月で目標達成! 3ヶ月継続の特典ラインに到達しました 🎉'
+              : `今月の目標は達成済みです。あと${monthsToNextReward}ヶ月継続で特典がもらえます。`
+          }</p>`
+        : ''
+    }`;
 }
 
 // 月間目標をrewardMonths連続で達成すると「メニュー更新」の対象になる、という進捗をスタンプカード風に見せる
@@ -1818,8 +1815,8 @@ const LP_MOCKS = {
       <div class="mk-label">ホーム画面に追加すると、<b>アプリのようにワンタップ</b></div>
     </div>`,
   video: `<div class="mk"><div class="mk-card mk-video">
-      <div class="mk-row"><span class="n">1</span>呼吸法<span class="r">1日3回</span></div>
-      <div class="mk-thumb"><span class="play"></span><span class="dur">3:32</span></div>
+      <div class="mk-row"><span class="n">3</span>股関節スクワット<span class="r">10回×3</span></div>
+      <div class="pthumb big t3"><svg class="pfig" viewBox="0 0 50 60" aria-hidden="true"><circle cx="25" cy="10" r="6"/><path d="M18.5 18h13l-1.5 19h-10z"/><path style="fill:none" d="M19 19L12 28L19 28M31 19L38 28L31 28M21 36L9 43L15 57M29 36L41 43L35 57"/><path class="pdetail" d="M19 28L25 26L31 28M25 26V19"/></svg><span class="pplay"></span><span class="pdur">1:45</span></div>
     </div></div>`,
   board: `<div class="mk"><div class="mk-card">
       <div class="mk-h">💬 みんなの掲示板</div>
@@ -1891,7 +1888,7 @@ const LP_MOCK_CSS = `
 `;
 
 function landingPage({ loggedIn = false, origin = '' } = {}) {
-  const description = '店舗会員さま向けのオンライン運動サービス。オンラインで、あなたの体を知っているアドバイザーが作るメニューで運動を続けられます。月額3,300円(税込)。';
+  const description = '店舗会員さま向けのオンライン運動サービス。あなた専用のメニューで、オンラインで運動を続けられます。月額3,300円(税込)。';
   const ogImage = origin ? `${origin}/icon-512.png` : '/icon-512.png';
   const entryBtn = (label = 'お申し込みはこちら', cls = 'btn primary big') =>
     `<a class="${cls}" href="${ENTRY_MAILTO}">${label}</a>`;
@@ -1899,12 +1896,12 @@ function landingPage({ loggedIn = false, origin = '' } = {}) {
   const worries = [
     'お店に通えなくなって、<span class="nw">運動する機会が減った</span>',
     'ひとりで何をすればいいのか、<span class="nw">わからない</span>',
-    '自己流のトレーニングで、<span class="nw">合っているのかわからない</span>',
+    'トレーニングが自己流になり<span class="nw">合ってるのかわからない</span>',
     '続けてきた運動習慣を、<span class="nw">途切れさせたくない</span>',
   ];
   const steps = [
     ['form', 'お申し込み', `${CONTACT_EMAIL} に、メールでお申し込みください。`, 'メールで申し込み'],
-    ['body', 'メニューを作成', 'お店であなたの体を見てきたアドバイザーが、あなた専用のメニューを作ります。体の情報をあらためて登録する必要はありません。', '登録の手間なし'],
+    ['body', 'メニューを作成', 'アドバイザーが、あなた専用のメニューを作ります。', 'アドバイザーが作成'],
     ['phone', 'マイページに届く', 'ログイン情報をお知らせします。マイページで動画や画像を見ながら取り組めます。', 'スマホでスタート'],
   ];
   const keepGoing = [
@@ -1930,9 +1927,8 @@ function landingPage({ loggedIn = false, origin = '' } = {}) {
     ['みんなの掲示板・ランキング', 'みんなの掲示板で、ほかの会員と励まし合いながら続けられます。今月のランキングには、希望した方の上位3名が表示されます。'],
   ];
   const faqs = [
-    ['体の情報をあらためて登録する必要はありますか?', 'ありません。お店でのトレーニングを通じて、アドバイザーがあなたの体の状態を把握しているので、それをもとにメニューを作ります。'],
     ['オンラインでも、アドバイザーに相談できますか?', 'はい。体調の変化や疑問点は、アプリのメッセージでいつでもアドバイザーに相談できます。'],
-    ['運動が苦手でも大丈夫ですか?', '大丈夫です。専属アドバイザーがあなたに合わせたメニューを用意します。動画や画像のお手本を見ながら、自分のペースで取り組めます。'],
+    ['運動が苦手でも大丈夫ですか?', '大丈夫です。あなたに合わせたメニューを用意します。動画や画像のお手本を見ながら、自分のペースで取り組めます。'],
     ['アプリのインストールは必要ですか?', '不要です。スマホやパソコンのブラウザから使えます。ホーム画面に追加すると、アプリのようにワンタップで開けます。'],
     ['続けられるか不安です。', '月10回の目標とスタンプ、バッジなど、楽しく続けられる工夫があります。困ったときはアドバイザーにメッセージで相談できます。'],
     ['料金はいくらですか?', '月額3,300円(税込)です。'],
@@ -2010,9 +2006,26 @@ a { color: inherit; }
 .mrow:first-of-type { border-top: 0; }
 .mrow .num { width: 18px; height: 18px; border-radius: 50%; background: var(--main); color: #fff; font-size: 0.6rem; display: inline-flex; align-items: center; justify-content: center; flex: none; }
 .mrow .reps { margin-left: auto; background: var(--soft); color: var(--dark); border-radius: 999px; padding: 1px 8px; font-size: 0.64rem; white-space: nowrap; }
+.pvid { padding: 2px 0 6px; border-top: 1px dashed var(--line); }
+.pvid .mrow { border-top: 0; }
+.pthumb { position: relative; display: block; border-radius: 7px; overflow: hidden; flex: none; }
+.pthumb.big { aspect-ratio: 16 / 9; margin-top: 2px; }
+.mrow .pthumb { width: 52px; height: 30px; }
+.pthumb::before { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 26%; background: rgba(255,255,255,0.35); }
+.pfig { position: absolute; left: 16%; bottom: 14%; height: 66%; width: auto; fill: rgba(255,255,255,0.9); stroke: rgba(255,255,255,0.9); stroke-width: 4.5; stroke-linecap: round; stroke-linejoin: round; }
+.pdetail { stroke: #0369a1 !important; stroke-width: 2.6 !important; fill: none !important; }
+.pbreath { stroke-width: 2.5 !important; opacity: 0.85; }
+.pthumb.t1 { background: linear-gradient(135deg, #93c5fd, #2563eb 65%, #1e3a8a); }
+.pthumb.t2 { background: linear-gradient(135deg, #a5b4fc, #4f46e5); }
+.pthumb.t3 { background: linear-gradient(135deg, #7dd3fc, #0284c7); }
+.pplay { position: absolute; left: 50%; top: 42%; width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%; background: #fff; box-shadow: 0 3px 10px rgba(0,0,0,0.3); z-index: 1; }
+.pplay::after { content: ""; position: absolute; left: 12px; top: 8px; border-left: 10px solid var(--main); border-top: 7px solid transparent; border-bottom: 7px solid transparent; }
+.mrow .pplay { top: 50%; width: 16px; height: 16px; margin: -8px 0 0 -8px; }
+.mrow .pplay::after { left: 6px; top: 4px; border-left-width: 6px; border-top-width: 4px; border-bottom-width: 4px; }
+.pdur { position: absolute; right: 5px; bottom: 4px; background: rgba(0,0,0,0.6); color: #fff; font-size: 0.56rem; border-radius: 4px; padding: 0 5px; z-index: 1; }
 .mcheck { background: var(--main); color: #fff; text-align: center; border-radius: 10px; padding: 9px; font-size: 0.76rem; font-weight: 700; }
 .stamps { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; }
-.stamps span { aspect-ratio: 1; border-radius: 50%; border: 1.5px dashed #93c5fd; }
+.stamps span { aspect-ratio: 1; border-radius: 50%; border: 1.5px dashed #93c5fd; display: flex; align-items: center; justify-content: center; font-size: 0.5rem; font-weight: 800; color: #fff; }
 .stamps span.on { background: var(--main); border: 0; }
 .mmeta { display: flex; justify-content: space-between; font-size: 0.66rem; color: var(--muted); margin-top: 6px; }
 .mock-note { text-align: center; font-size: 0.72rem; color: var(--muted); margin-top: 10px; }
@@ -2114,12 +2127,14 @@ footer a { font-weight: 700; color: var(--main); }
   section.block { padding: 48px 0; }
   .cta-row .btn { flex: 1; }
   .brand span { font-size: 0.9rem; }
-  .head .login { display: none; }
   .hero .wrap > div, .reward > div { min-width: 0; } /* 中身の幅で列が画面からはみ出さないように */
   .price-chip { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
 }
+@media (max-width: 560px) {
+  .brand span { display: none; } /* スマホでは、ヘッダーはロゴと「会員ログイン」「申し込む」ボタンにする */
+}
 @media (max-width: 400px) {
-  .brand span { display: none; } /* 小さいスマホでは、ヘッダーはロゴと申し込みボタンだけにする */
+  .head .btn { padding: 7px 11px; }
   .price-chip .p { font-size: 1.6rem; }
   .btn.big { padding: 14px 20px; }
 }
@@ -2143,10 +2158,7 @@ footer a { font-weight: 700; color: var(--main); }
       <div class="eyebrow">店舗会員さま向け オンライン運動サービス</div>
       <h1><em>あなたのペース</em>で、<br>続けられる運動習慣を。</h1>
       <p class="subcopy">オンラインで、<span class="nw"><em>いつものアドバイザー</em>と</span><span class="nw">運動を続けられます。</span></p>
-      <p class="pace">月10回(週2〜3回)が目安</p>
-      <p class="lead">オンライン運動元気倶楽部は、<span class="nw">お店の会員さま向けの</span><span class="nw">オンライン運動サービスです。</span><span class="nw">オンラインで、</span><span class="nw">あなたの体を知っている</span><span class="nw">アドバイザーが</span><span class="nw">あなた専用のメニューを作り、</span><span class="nw">日々の記録をサポートします。</span></p>
       <div class="price-chip"><span class="t">シンプルな月額制</span><span class="p">月額3,300<small>円(税込)</small></span></div>
-      <div class="cta-row">${entryBtn()}</div>
     </div>
     <div>
       <div class="phone" aria-hidden="true">
@@ -2154,14 +2166,17 @@ footer a { font-weight: 700; color: var(--main); }
         <div class="body">
           <div class="mcard">
             <h4>花子さんの専用トレーニング</h4>
-            <div class="mrow"><span class="num">1</span>呼吸法<span class="reps">1日3回</span></div>
-            <div class="mrow"><span class="num">2</span>前鋸筋トレーニング<span class="reps">10回×2</span></div>
-            <div class="mrow"><span class="num">3</span>股関節スクワット<span class="reps">10回×3</span></div>
+            <div class="pvid">
+              <div class="mrow"><span class="num">1</span>呼吸法<span class="reps">1日3回</span></div>
+              <div class="pthumb big t1"><svg class="pfig" viewBox="0 0 50 60" aria-hidden="true"><circle cx="22" cy="9" r="6"/><path style="fill:none" d="M22 16v21M22 20l-7 9l7 3M22 20l7 9l-7 3M22 37l-4 19M22 37l4 19"/><path class="pbreath" style="fill:none" d="M32 6q3 2.5 7 0M32 12q3 2.5 7 0"/></svg><span class="pplay"></span><span class="pdur">3:32</span></div>
+            </div>
+            <div class="mrow"><span class="pthumb t2"><span class="pplay"></span></span><span class="num">2</span>前鋸筋トレーニング<span class="reps">10回×2</span></div>
+            <div class="mrow"><span class="pthumb t3"><span class="pplay"></span></span><span class="num">3</span>股関節スクワット<span class="reps">10回×3</span></div>
           </div>
           <div class="mcheck">✅ トレーニング完了をチェック</div>
           <div class="mcard">
             <h4>今月の目標🏋️(月10回)</h4>
-            <div class="stamps">${Array.from({ length: 10 }, (_, i) => `<span class="${i < 6 ? 'on' : ''}"></span>`).join('')}</div>
+            <div class="stamps">${Array.from({ length: 10 }, (_, i) => `<span class="${i < 6 ? 'on' : ''}">${i < 6 ? '✓' : ''}</span>`).join('')}</div>
             <div class="mmeta"><span>6 / 10回</span><span>あと4回!</span></div>
           </div>
         </div>
@@ -2178,14 +2193,14 @@ footer a { font-weight: 700; color: var(--main); }
     <div class="worries">
       ${worries.map((w) => `<div class="worry"><span class="q">✓</span><span>${w}</span></div>`).join('')}
     </div>
-    <div class="answer">オンライン運動元気倶楽部なら、<br><span class="nw">あなたの体を知っている</span><span class="nw">アドバイザーが作る</span><span class="nw">あなた専用のメニューで、</span><br><span class="nw">これからも</span><span class="nw">安心して運動を続けられます</span></div>
+    <div class="answer">オンライン運動元気倶楽部なら、<br><span class="nw">あなた専用のメニューで、</span><br><span class="nw">これからも</span><span class="nw">安心して運動を続けられます</span></div>
   </div>
 </section>
 
 <section class="block" id="how">
   <div class="wrap">
     <div class="kicker">特徴</div>
-    <h2>あなたの体を知っているから、<br><em>登録なし</em>ですぐ始められる</h2>
+    <h2>あなた専用のメニューを、<br><em>アドバイザー</em>が作ります</h2>
     <div class="flow">
       ${steps
         .map(([ic, t, d, tag], i) => `<div class="fstep">
@@ -2251,8 +2266,7 @@ footer a { font-weight: 700; color: var(--main); }
     <div class="price-card">
       <div class="top"><div class="t">オンライン運動元気倶楽部</div><div class="p"><small>月額</small>3,300<small>円</small></div><div class="t" style="font-weight:400;font-size:0.85rem;">(税込)</div></div>
       <ul>
-        <li>お店のアドバイザーが作る、あなた専用のメニュー</li>
-        <li>体の情報の登録は不要</li>
+        <li>あなた専用のメニュー</li>
         <li>3ヶ月連続達成でメニュー更新特典</li>
         <li>アドバイザーへのメッセージ相談</li>
         <li>スマホのブラウザで使える(インストール不要)</li>

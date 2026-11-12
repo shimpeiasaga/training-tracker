@@ -516,7 +516,23 @@ tr:hover { background: #fafcfa; }
   gap: 8px;
   margin-bottom: 8px;
 }
-.video-item-head h4 { margin: 0; font-size: 0.95rem; }
+.video-item-head h4 { margin: 0; font-size: 0.95rem; display: flex; align-items: center; gap: 8px; }
+/* トレーニングの番号(丸数字の文字は端末によって形が揃わないため、丸の中に数字を入れて統一する) */
+.media-num {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.7em;
+  height: 1.7em;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
 .media-note {
   margin: 0 0 10px;
   font-size: 1.05rem;
@@ -772,3 +788,12 @@ summary.lib-category-heading::marker { color: var(--primary); }
   .msg-bubble { max-width: 92%; }
   .board-reply { margin-left: 8px; }
 }
+
+/* マイページ「今月の目標」: 実施した回数だけ✓の入った丸が並ぶ(2026-11-12) */
+.goal-stamps { display: grid; gap: 6px; max-width: 420px; }
+.goal-stamps span { aspect-ratio: 1; border-radius: 50%; border: 2px dashed #93c5fd; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 0.85rem; }
+.goal-stamps span.on { background: var(--primary); border: 0; }
+.goal-meta { display: flex; justify-content: space-between; align-items: baseline; max-width: 420px; margin-top: 10px; font-size: 0.95rem; color: var(--muted); }
+.goal-meta b { color: var(--primary); }
+.goal-note { font-size: 0.85rem; color: var(--primary); font-weight: 700; margin: 10px 0 0; }
+@media (max-width: 400px) { .goal-stamps { gap: 4px; } .goal-stamps span { font-size: 0.7rem; } }

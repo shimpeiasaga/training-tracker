@@ -117,7 +117,7 @@ const MONTHLY_GOAL = 10; // 月にこの回数以上で「達成」
 const REWARD_MONTHS = 3; // この月数連続達成で特典1回分
 
 // 会員1人あたりに登録できる動画・画像(合わせて)の最大件数
-const MAX_MEMBER_MEDIA = 10;
+const MAX_MEMBER_MEDIA = 20;
 
 // 素材ライブラリ(会員に配る前の動画・画像の置き場)に登録できる最大件数
 const MAX_LIBRARY_ITEMS = 100;
