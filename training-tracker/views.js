@@ -212,7 +212,7 @@ function layout({ title, body, script = '', topbar = '', extraScript = '' }) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)}</title>
-<link rel="stylesheet" href="/style.css?v=20261112c">
+<link rel="stylesheet" href="/style.css?v=20261112d">
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" href="/icon-192.png">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -825,11 +825,15 @@ function calendarMemoHtml({ grid, checkinRecords, monthKeyForGrid, today, editab
     .sort((a, b) => b.localeCompare(a))
     .map((d) => `<li><b>${formatDateJa(d)}</b>${escapeHtml(notes[d])}</li>`)
     .join('');
-  return `
-    <div class="memo-panel" data-memo-panel data-default="${defaultDate}" data-notes="${escapeHtml(JSON.stringify(notes))}">
+  // 管理画面(editable=false)は下の「◯月のメモ」一覧で全部読めるので、日付ごとのメモ欄は出さない
+  const panelHtml = editable
+    ? `<div class="memo-panel" data-memo-panel data-default="${defaultDate}" data-notes="${escapeHtml(JSON.stringify(notes))}">
       <div class="memo-date"><span data-memo-date>${formatDateJa(defaultDate)}</span><small>実施済み ✓</small></div>
       ${panelBody}
-    </div>
+    </div>`
+    : '';
+  return `
+    ${panelHtml}
     <div class="memo-list">
       <h4>${monthLabel}のメモ</h4>
       ${listItems ? `<ul>${listItems}</ul>` : `<p class="memo-none">${monthLabel}のメモはまだありません。</p>`}
@@ -1224,7 +1228,7 @@ function memberPage({
       ${menuUpdateCardHtml({ monthlyStreak, rewardMonths })}
     </div>
 
-    <div class="card" id="calendar">
+    <div class="card memo-edit" id="calendar">
       <h3>${formatMonthJa(monthKeyForGrid)}の実施日カレンダー・メモ</h3>
       <div class="stat-row">
         <div class="stat-box"><div class="num">${grid.filter((c) => c && c.checked).length}回</div><div class="label">${Number(monthKeyForGrid.slice(5))}月の実施回数</div></div>
@@ -1540,7 +1544,6 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
       <div class="calendar-compact">
         ${calendarNavHtml(calendarBasePath, prevMonthKey, nextMonthKey)}
         ${gridHtml(grid)}
-        ${calendarHintHtml(grid, false)}
         ${calendarMemoHtml({ grid, checkinRecords, monthKeyForGrid, today: todayStr() })}
       </div>
       <form method="POST" action="/admin/members/${member.id}/exclude-ranking" style="margin-top:14px;" onchange="this.requestSubmit()">
