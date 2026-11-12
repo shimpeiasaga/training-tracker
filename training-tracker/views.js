@@ -793,9 +793,9 @@ function formatMonthJa(mKey) {
 
 // カレンダーの前月/翌月ナビゲーション(翌月が無い=今月なら翌月ボタンは無効表示)
 function calendarNavHtml(basePath, prevMonthKey, nextMonthKey) {
-  const prev = `<a class="btn" href="${basePath}?month=${prevMonthKey}">&laquo; 前月</a>`;
+  const prev = `<a class="btn" href="${basePath}?month=${prevMonthKey}#calendar">&laquo; 前月</a>`;
   const next = nextMonthKey
-    ? `<a class="btn" href="${basePath}?month=${nextMonthKey}">翌月 &raquo;</a>`
+    ? `<a class="btn" href="${basePath}?month=${nextMonthKey}#calendar">翌月 &raquo;</a>`
     : `<button class="btn" type="button" disabled>翌月 &raquo;</button>`;
   return `<div class="calendar-nav">${prev}${next}</div>`;
 }
@@ -1147,7 +1147,7 @@ function memberPage({
       ${menuUpdateCardHtml({ monthlyStreak, rewardMonths })}
     </div>
 
-    <div class="card">
+    <div class="card" id="calendar">
       <div class="stat-row">
         <div class="stat-box"><div class="num">${grid.filter((c) => c && c.checked).length}回</div><div class="label">${Number(monthKeyForGrid.slice(5))}月の実施回数</div></div>
         <div class="stat-box"><div class="num">${weekCount}/7</div><div class="label">今週の実施回数</div></div>
@@ -1456,7 +1456,7 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
         ? `<a href="#reward" class="reward-notice"><b>🎁 この会員はメニュー更新の対象です</b><span>新しいメニューを作って会員ページに届けたら、「メニュー更新特典を渡す」ボタンを押してください。</span></a>`
         : ''
     }
-    <div class="card">
+    <div class="card" id="calendar">
       <h2>${escapeHtml(member.name)} さんの進捗</h2>
       <div class="stat-row">
         <div class="stat-box"><div class="num">${grid.filter((c) => c && c.checked).length}回</div><div class="label">${Number(monthKeyForGrid.slice(5))}月の実施回数</div></div>
