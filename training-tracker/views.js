@@ -1,5 +1,5 @@
 // HTMLをテンプレートエンジンなしで生成する(外部依存なし)
-const { MONTHLY_GOAL, REWARD_MONTHS, MAX_MEMBER_MEDIA, MAX_LIBRARY_ITEMS, DEFAULT_LIBRARY_CATEGORY, MAX_LIBRARY_CATEGORIES, STREAK_BADGES, monthKey } = require('./stats');
+const { MONTHLY_GOAL, REWARD_MONTHS, MAX_MEMBER_MEDIA, MAX_LIBRARY_ITEMS, DEFAULT_LIBRARY_CATEGORY, MAX_LIBRARY_CATEGORIES, STREAK_BADGES, monthKey, todayStr } = require('./stats');
 const CHART_JS = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js';
 
 function escapeHtml(str) {
@@ -212,7 +212,7 @@ function layout({ title, body, script = '', topbar = '', extraScript = '' }) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)}</title>
-<link rel="stylesheet" href="/style.css?v=20261112b">
+<link rel="stylesheet" href="/style.css?v=20261112c">
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" href="/icon-192.png">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -770,7 +770,7 @@ function gridHtml(grid) {
     .map((c) => {
       if (!c) return '<div class="day empty"></div>';
       const weekendCls = c.dow === 0 ? 'sun' : c.dow === 6 ? 'sat' : '';
-      return `<div class="day ${c.checked ? 'checked' : ''} ${weekendCls}" title="${c.date}"><span class="daynum">${c.day}</span></div>`;
+      return `<div class="day ${c.checked ? 'checked' : ''} ${weekendCls}" title="${c.date}"${c.checked ? ` data-date="${c.date}"` : ''}><span class="daynum">${c.day}</span></div>`;
     })
     .join('');
   return `<div class="grid-head">${head}</div><div class="grid">${cells}</div>`;
@@ -798,6 +798,83 @@ function calendarNavHtml(basePath, prevMonthKey, nextMonthKey) {
     ? `<a class="btn" href="${basePath}?month=${nextMonthKey}#calendar">翌月 &raquo;</a>`
     : `<button class="btn" type="button" disabled>翌月 &raquo;</button>`;
   return `<div class="calendar-nav">${prev}${next}</div>`;
+}
+
+// カレンダーの下に出すメモ欄と「◯月のメモ」一覧(2026-11-12に「実施日(メモ機能)」カードから統合)
+// 実施した日(青いマス)を押すと、その日のメモ欄に切り替わる。editable=trueは本人(マイページ)用で書き込みフォーム付き、
+// falseは管理画面用で読むだけ。メモは今までどおり実施日ごとに保存されているものをそのまま使う
+function calendarMemoHtml({ grid, checkinRecords, monthKeyForGrid, today, editable = false }) {
+  const notes = {};
+  (checkinRecords || []).forEach((c) => {
+    if (c.note && monthKey(c.date) === monthKeyForGrid) notes[c.date] = c.note;
+  });
+  const checkedDates = grid.filter((c) => c && c.checked).map((c) => c.date);
+  const monthLabel = `${Number(monthKeyForGrid.slice(5))}月`;
+  if (!checkedDates.length) {
+    return `<p class="memo-none">${monthLabel}はまだ実施した日がありません。</p>`;
+  }
+  const defaultDate = checkedDates.includes(today) ? today : checkedDates[checkedDates.length - 1];
+  const note = notes[defaultDate] || '';
+  const panelBody = editable
+    ? `<form method="POST" action="/member/checkins/${defaultDate}/note" data-memo-form>
+          <textarea name="note" rows="3" maxlength="300" placeholder="例: 今日は体が軽かった、肩まわりが少し張っている、呼吸が深くできて気持ちよかった など">${escapeHtml(note)}</textarea>
+          <button class="btn" type="submit">保存</button><span class="memo-saved" data-memo-saved>保存しました</span>
+        </form>`
+    : `<div class="memo-text ${note ? '' : 'empty'}" data-memo-text>${note ? escapeHtml(note) : 'メモはありません'}</div>`;
+  const listItems = Object.keys(notes)
+    .sort((a, b) => b.localeCompare(a))
+    .map((d) => `<li><b>${formatDateJa(d)}</b>${escapeHtml(notes[d])}</li>`)
+    .join('');
+  return `
+    <div class="memo-panel" data-memo-panel data-default="${defaultDate}" data-notes="${escapeHtml(JSON.stringify(notes))}">
+      <div class="memo-date"><span data-memo-date>${formatDateJa(defaultDate)}</span><small>実施済み ✓</small></div>
+      ${panelBody}
+    </div>
+    <div class="memo-list">
+      <h4>${monthLabel}のメモ</h4>
+      ${listItems ? `<ul>${listItems}</ul>` : `<p class="memo-none">${monthLabel}のメモはまだありません。</p>`}
+    </div>
+    <script>
+    (function () {
+      var panel = document.querySelector('[data-memo-panel]');
+      if (!panel) return;
+      var notes = JSON.parse(panel.getAttribute('data-notes') || '{}');
+      var W = ['日', '月', '火', '水', '木', '金', '土'];
+      function label(d) { var t = new Date(d + 'T00:00:00Z'); return (t.getUTCMonth() + 1) + '月' + t.getUTCDate() + '日(' + W[t.getUTCDay()] + ')'; }
+      function select(date) {
+        var cell = document.querySelector('#calendar .grid .day.checked[data-date="' + date + '"]');
+        if (!cell) return false;
+        document.querySelectorAll('#calendar .grid .day.selected').forEach(function (c) { c.classList.remove('selected'); });
+        cell.classList.add('selected');
+        panel.querySelector('[data-memo-date]').textContent = label(date);
+        var form = panel.querySelector('[data-memo-form]');
+        if (form) { form.action = '/member/checkins/' + date + '/note'; form.querySelector('textarea').value = notes[date] || ''; }
+        var text = panel.querySelector('[data-memo-text]');
+        if (text) { text.textContent = notes[date] || 'メモはありません'; text.classList.toggle('empty', !notes[date]); }
+        var saved = panel.querySelector('[data-memo-saved]');
+        if (saved) saved.style.display = 'none';
+        return true;
+      }
+      var grid = document.querySelector('#calendar .grid');
+      if (grid) grid.addEventListener('click', function (e) {
+        var c = e.target.closest('.day.checked');
+        if (c) select(c.getAttribute('data-date'));
+      });
+      var m = location.search.match(/[?&]day=(\d{4}-\d{2}-\d{2})/);
+      if (m && select(m[1])) {
+        var saved = panel.querySelector('[data-memo-saved]');
+        if (saved) saved.style.display = 'inline';
+      } else {
+        select(panel.getAttribute('data-default'));
+      }
+    })();
+    </script>`;
+}
+
+// カレンダーの上に出す使い方の案内(実施した日があるときだけ)
+function calendarHintHtml(grid, editable) {
+  if (!grid.some((c) => c && c.checked)) return '';
+  return `<div class="cal-hint"><span aria-hidden="true">👆</span><span><b>青い日(実施した日)</b>を押すと、その日のメモを${editable ? '書けます✏️' : '見られます'}</span></div>`;
 }
 
 // 実施した日を新しい順に一覧表示する(「何月何日にできたか」がひと目で分かるように)
@@ -1152,15 +1229,11 @@ function memberPage({
         <div class="stat-box"><div class="num">${grid.filter((c) => c && c.checked).length}回</div><div class="label">${Number(monthKeyForGrid.slice(5))}月の実施回数</div></div>
         <div class="stat-box"><div class="num">${weekCount}/7</div><div class="label">今週の実施回数</div></div>
       </div>
-      <h3>${formatMonthJa(monthKeyForGrid)}のカレンダー</h3>
+      <h3>${formatMonthJa(monthKeyForGrid)}の実施日カレンダー・メモ</h3>
       ${calendarNavHtml(calendarBasePath, prevMonthKey, nextMonthKey)}
       ${gridHtml(grid)}
-    </div>
-
-    <div class="card" id="history">
-      <h3>実施日(メモ機能)</h3>
-      <p style="font-size:0.8rem;color:var(--muted);margin:0 0 8px;">日付をタップするとメモを自由に追加、編集できます</p>
-      ${historyListHtml(checkinRecords, { editable: true })}
+      ${calendarHintHtml(grid, true)}
+      ${calendarMemoHtml({ grid, checkinRecords, monthKeyForGrid, today, editable: true })}
     </div>
 
     <div class="card" id="messages">
@@ -1463,10 +1536,12 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
         <div class="stat-box"><div class="num">${weekCount}/7</div><div class="label">今週</div></div>
         <div class="stat-box"><div class="num">${total}</div><div class="label">累計実施回数</div></div>
       </div>
-      <h3>${formatMonthJa(monthKeyForGrid)}のカレンダー</h3>
+      <h3>${formatMonthJa(monthKeyForGrid)}の実施日カレンダー・メモ</h3>
       <div class="calendar-compact">
         ${calendarNavHtml(calendarBasePath, prevMonthKey, nextMonthKey)}
         ${gridHtml(grid)}
+        ${calendarHintHtml(grid, false)}
+        ${calendarMemoHtml({ grid, checkinRecords, monthKeyForGrid, today: todayStr() })}
       </div>
       <form method="POST" action="/admin/members/${member.id}/exclude-ranking" style="margin-top:14px;" onchange="this.requestSubmit()">
         <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem;color:var(--muted);cursor:pointer;">
@@ -1474,11 +1549,6 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
           ランキングに表示しない(スタッフのテスト用アカウントなど)
         </label>
       </form>
-    </div>
-
-    <div class="card">
-      <h3>実施日(メモ機能)</h3>
-      ${historyListHtml(checkinRecords)}
     </div>
 
     <div class="card">

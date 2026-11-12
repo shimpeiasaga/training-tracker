@@ -523,7 +523,8 @@ async function handleRequest(req, res) {
     } catch (err) {
       // チェックインが存在しない日付を指定された場合などは何もせず戻る
     }
-    return redirect(res, '/member#history');
+    // 保存したら、その日の月のカレンダーを開き、その日のメモ欄を選んだ状態に戻す
+    return redirect(res, `/member?month=${checkinNoteMatch[1].slice(0, 7)}&day=${checkinNoteMatch[1]}#calendar`);
   }
 
   if (pathname === '/member/password' && method === 'GET') {
