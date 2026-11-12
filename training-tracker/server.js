@@ -717,7 +717,7 @@ async function handleRequest(req, res) {
     match = pathname.match(/^\/admin\/members\/(\d+)\/reward$/);
     if (match && method === 'POST') {
       await db.incrementRewardsGiven(match[1]);
-      return redirect(res, '/admin?message=' + encodeURIComponent('特典を渡した記録を追加しました'));
+      return redirect(res, '/admin?message=' + encodeURIComponent('メニュー更新特典を渡した記録を追加しました'));
     }
 
     match = pathname.match(/^\/admin\/members\/(\d+)\/messages\/count$/);

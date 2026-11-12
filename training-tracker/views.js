@@ -212,7 +212,7 @@ function layout({ title, body, script = '', topbar = '', extraScript = '' }) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)}</title>
-<link rel="stylesheet" href="/style.css?v=20261112">
+<link rel="stylesheet" href="/style.css?v=20261112b">
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" href="/icon-192.png">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -669,7 +669,7 @@ function guidePage(userRole) {
         guideItem('🎥 専用トレーニングの登録', '会員詳細ページから動画(YouTubeリンクなど)・画像・呼吸法などのHTMLツールを追加できます。▲▼ボタンで表示順を入れ替えたり、「セット数・回数を編集」からメモ(例: 3セット×10回)を追加・修正できます。'),
         guideItem('🎥📷 素材ライブラリ', 'よく使う動画・画像をあらかじめ登録しておける置き場です。会員ごとに毎回アップロードし直さなくても、ライブラリから選んで配布できます。'),
         guideItem('🚫 ランキングから除外', 'スタッフのテスト用アカウントなど、ランキングに表示したくない会員は、会員詳細ページのチェックボックスで除外できます。'),
-        guideItem('🎁 特典を渡す', '目標を連続達成した会員には一覧に「特典を渡す」ボタンが表示されます。実際に特典を渡したらボタンを押して記録してください。'),
+        guideItem('🎁 メニュー更新特典を渡す', '目標を連続達成した会員には一覧に「メニュー更新特典を渡す」ボタンが表示されます。実際にメニューを更新したらボタンを押して記録してください。'),
         guideItem('🎉 ランクアップお祝いメッセージ', 'ダッシュボードの「ランクアップ時のお祝いメッセージ」から、バッジ獲得時に表示する一言メッセージをバッジごとに設定できます。'),
         guideItem('📩 メッセージ対応', '会員から届いたメッセージに返信できます。新着があるとダッシュボード上部に通知が表示されます。'),
         guideItem('💾 バックアップ', '1日1回自動でバックアップが保存され、直近14日分をいつでもダウンロードできます。手動ですぐに保存したい時は「今すぐダウンロード」を押してください。'),
@@ -985,8 +985,8 @@ function monthlyProgressHtml({ monthCount, monthGoal, monthlyStreak, rewardMonth
       achieved
         ? `<p class="goal-note">${
             monthsToNextReward === 0
-              ? '今月で目標達成! 3ヶ月継続の特典ラインに到達しました 🎉'
-              : `今月の目標は達成済みです。あと${monthsToNextReward}ヶ月継続で特典がもらえます。`
+              ? '今月で目標達成! 3ヶ月継続のメニュー更新特典ラインに到達しました 🎉'
+              : `今月の目標は達成済みです。あと${monthsToNextReward}ヶ月継続でメニュー更新特典がもらえます。`
           }</p>`
         : ''
     }`;
@@ -1078,7 +1078,7 @@ function memberPage({
     ? `<div class="celebrate-banner ${rewardCelebrate ? 'reward' : ''}">
         ${
           rewardCelebrate
-            ? `🎁 特典ゲット!<div class="sub">月${MONTHLY_GOAL}回を${REWARD_MONTHS}ヶ月連続で達成しました。管理者に伝えて特典を受け取ってください!</div>`
+            ? `🎁 メニュー更新特典ゲット!<div class="sub">月${MONTHLY_GOAL}回を${REWARD_MONTHS}ヶ月連続で達成しました。管理者に伝えてメニュー更新特典を受け取ってください!</div>`
             : milestoneBadge
             ? milestoneMessageHtml
             : `🎉 今日もチェック完了!<div class="sub">連続${streak}日目、いい調子です</div>`
@@ -1129,7 +1129,7 @@ function memberPage({
     </div>
 
     <div class="card">
-      <h2>今日のトレーニング (${today})</h2>
+      <h2>今日のトレーニング <span style="white-space:nowrap;">${formatDateJa(today)}</span></h2>
       <form method="POST" action="/member/checkin">
         <button class="checkin-btn ${checkedToday ? 'checked' : ''}" type="submit">
           ${checkedToday ? '✓ 完了しました(取り消す)' : 'トレーニング完了をチェック'}
@@ -1149,7 +1149,7 @@ function memberPage({
 
     <div class="card">
       <div class="stat-row">
-        <div class="stat-box"><div class="num">${streak}</div><div class="label">連続日数</div></div>
+        <div class="stat-box"><div class="num">${grid.filter((c) => c && c.checked).length}回</div><div class="label">${Number(monthKeyForGrid.slice(5))}月の実施回数</div></div>
         <div class="stat-box"><div class="num">${weekCount}/7</div><div class="label">今週の実施回数</div></div>
       </div>
       <h3>${formatMonthJa(monthKeyForGrid)}のカレンダー</h3>
@@ -1223,6 +1223,15 @@ function memberPasswordPage({ userName, error, message }) {
   });
 }
 
+// メニュー更新特典の対象者がいるとき、管理画面のトップに出すお知らせ(アドバイザーがメニュー更新に気づけるように)
+function rewardNoticeHtml(pendingMembers) {
+  if (!pendingMembers.length) return '';
+  const names = pendingMembers
+    .map((m) => `<a href="/admin/member/${m.id}#reward">${escapeHtml(m.name)}さん</a>`)
+    .join('、');
+  return `<div class="reward-notice"><b>🎁 メニュー更新の対象者がいます：${names}</b><span>メニューを更新したら「メニュー更新特典を渡す」を押してください。</span></div>`;
+}
+
 function adminPage({ members, ranked, error, message, unreadMembers = [], rankUpMessages = {}, backups = [], pushEnabledMemberIds = new Set(), admins = [], currentUserId = null }) {
   // 会員一覧の名前の横にも、新着メッセージがある会員には📩マークを出す(上のバナーだけだと見落としやすいため)
   const unreadMemberIds = new Set(unreadMembers.map((m) => m.id));
@@ -1252,8 +1261,8 @@ function adminPage({ members, ranked, error, message, unreadMembers = [], rankUp
       <td>
         ${
           m.rewardsPending > 0
-            ? `<form method="POST" action="/admin/members/${m.id}/reward" onsubmit="return confirm('${escapeHtml(m.name)}さんに特典を渡しましたか?');">
-                <button class="btn primary" type="submit">🎁 特典を渡す(残${m.rewardsPending})</button>
+            ? `<form method="POST" action="/admin/members/${m.id}/reward" onsubmit="return confirm('${escapeHtml(m.name)}さんにメニュー更新特典を渡しましたか?');">
+                <button class="btn primary" type="submit">🎁 メニュー更新特典を渡す(残${m.rewardsPending})</button>
                </form>`
             : `<span style="font-size:0.8rem;color:var(--muted);">渡し済み ${m.rewardsGiven}回</span>`
         }
@@ -1275,6 +1284,7 @@ function adminPage({ members, ranked, error, message, unreadMembers = [], rankUp
             .join('、')}さん</a>`
         : ''
     }
+    ${rewardNoticeHtml(members.filter((m) => m.rewardsPending > 0))}
     ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
     ${message ? `<div class="message">${escapeHtml(message)}</div>` : ''}
 
@@ -1309,13 +1319,13 @@ function adminPage({ members, ranked, error, message, unreadMembers = [], rankUp
       <h2>会員の進捗</h2>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>名前</th><th>今週</th><th>今月</th><th>目標達成月数</th><th>連続日数</th><th>累計</th><th>最終実施日</th><th>通知</th><th>特典</th><th></th></tr></thead>
+          <thead><tr><th>名前</th><th>今週</th><th>今月</th><th>目標達成月数</th><th>連続日数</th><th>累計</th><th>最終実施日</th><th>通知</th><th>メニュー更新特典</th><th></th></tr></thead>
           <tbody>
             ${rows || `<tr><td colspan="10">まだ会員が登録されていません</td></tr>`}
           </tbody>
         </table>
       </div>
-      <p style="font-size:0.8rem;color:var(--muted);margin-top:8px;">特典ルール: 月${MONTHLY_GOAL}回の実施を${REWARD_MONTHS}ヶ月連続で達成すると特典1回。以降も継続すれば${REWARD_MONTHS}ヶ月ごとに繰り返し獲得できます。</p>
+      <p style="font-size:0.8rem;color:var(--muted);margin-top:8px;">メニュー更新特典のルール: 月${MONTHLY_GOAL}回の実施を${REWARD_MONTHS}ヶ月連続で達成するとメニュー更新特典1回。以降も継続すれば${REWARD_MONTHS}ヶ月ごとに繰り返し獲得できます。</p>
     </div>
 
     <div class="card">
@@ -1441,10 +1451,15 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
     extraScript: MEDIA_REORDER_SCRIPT + MULTI_CONFIRM_SCRIPT,
     body: `
     ${hadUnreadMessages ? `<a href="#messages" class="notice-banner">📩 ${escapeHtml(member.name)}さんから新着メッセージがあります</a>` : ''}
+    ${
+      rewardsPending > 0
+        ? `<a href="#reward" class="reward-notice"><b>🎁 この会員はメニュー更新の対象です</b><span>新しいメニューを作って会員ページに届けたら、「メニュー更新特典を渡す」ボタンを押してください。</span></a>`
+        : ''
+    }
     <div class="card">
       <h2>${escapeHtml(member.name)} さんの進捗</h2>
       <div class="stat-row">
-        <div class="stat-box"><div class="num">${streak}</div><div class="label">連続日数</div></div>
+        <div class="stat-box"><div class="num">${grid.filter((c) => c && c.checked).length}回</div><div class="label">${Number(monthKeyForGrid.slice(5))}月の実施回数</div></div>
         <div class="stat-box"><div class="num">${weekCount}/7</div><div class="label">今週</div></div>
         <div class="stat-box"><div class="num">${total}</div><div class="label">累計実施回数</div></div>
       </div>
@@ -1467,20 +1482,20 @@ function adminMemberPage({ member, streak, weekCount, total, grid, monthKeyForGr
     </div>
 
     <div class="card">
-      <h3>月間目標(月${MONTHLY_GOAL}回 × ${REWARD_MONTHS}ヶ月継続で特典)</h3>
+      <h3>月間目標(月${MONTHLY_GOAL}回 × ${REWARD_MONTHS}ヶ月継続でメニュー更新特典)</h3>
       <div class="stat-row">
         <div class="stat-box"><div class="num">${monthCount}/${MONTHLY_GOAL}</div><div class="label">今月</div></div>
         <div class="stat-box"><div class="num">${monthlyStreak}ヶ月</div><div class="label">目標達成 連続月数</div></div>
-        <div class="stat-box"><div class="num">${rewardsGiven}/${rewardsEarned}</div><div class="label">特典 渡し済み/獲得済み</div></div>
+        <div class="stat-box"><div class="num">${rewardsGiven}/${rewardsEarned}</div><div class="label">メニュー更新特典 渡し済み/獲得済み</div></div>
       </div>
       ${menuUpdateCardHtml({ monthlyStreak, rewardMonths: REWARD_MONTHS, showMessage: false })}
       <canvas id="monthlyChart" height="110"></canvas>
       ${
         rewardsPending > 0
-          ? `<form method="POST" action="/admin/members/${member.id}/reward" onsubmit="return confirm('${escapeHtml(member.name)}さんに特典を渡しましたか?');" style="margin-top:12px;">
-              <button class="btn primary" type="submit">🎁 特典を渡す(残${rewardsPending})</button>
+          ? `<form method="POST" action="/admin/members/${member.id}/reward" id="reward" onsubmit="return confirm('${escapeHtml(member.name)}さんにメニュー更新特典を渡しましたか?');" style="margin-top:12px;">
+              <button class="btn primary" type="submit">🎁 メニュー更新特典を渡す(残${rewardsPending})</button>
              </form>`
-          : `<p style="font-size:0.85rem;color:var(--muted);margin-top:12px;">現在、未受け渡しの特典はありません。</p>`
+          : `<p style="font-size:0.85rem;color:var(--muted);margin-top:12px;">現在、未受け渡しのメニュー更新特典はありません。</p>`
       }
     </div>
 
